@@ -1,0 +1,72 @@
+name: build-arm64
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: arm64
+            name: sockshttp-linux-arm64
+          - goarch: amd64
+            name: sockshttp-linux-amd64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: go mod tidy
+        run: go mod tidy
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags="-s -w" \
+            -o dist/${{ matrix.name }} .
+
+      - name: verify binary
+        run: |
+          file dist/${{ matrix.name }}
+          ls -lh dist/${{ matrix.name }}
+
+      - name: package
+        run: |
+          cd dist
+          cp ../sockshttp.yaml .
+          cp ../scripts/init.d/sockshttp init.d-sockshttp
+          cp ../scripts/action/routing.sh qtun-routing
+          tar czf ${{ matrix.name }}.tar.gz \
+            ${{ matrix.name }} \
+            sockshttp.yaml \
+            init.d-sockshttp \
+            qtun-routing
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/${{ matrix.name }}.tar.gz
+
+      - name: attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ matrix.name }}.tar.gz
