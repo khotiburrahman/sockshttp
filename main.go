@@ -1955,8 +1955,8 @@ function fmtBytes(n){
 }
 
 function showTab(name,btn){
-  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-  document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active')});
+  document.querySelectorAll('nav button').forEach(function(b){b.classList.remove('active')});
   document.getElementById('tab-'+name).classList.add('active');
   btn.classList.add('active');
   if(name==='logs')connectLogs();
@@ -1965,46 +1965,50 @@ function showTab(name,btn){
 
 async function loadStatus(){
   try{
-    const r=await fetch('/api/status');
-    const d=await r.json();
-    const badge=document.getElementById('stateBadge');
+    var r=await fetch('/api/status');
+    var d=await r.json();
+    var badge=document.getElementById('stateBadge');
     badge.textContent=d.state;
     badge.className='state-badge state-'+d.state;
     document.getElementById('serverInfo').textContent=d.server||'';
-    document.getElementById('statsRow').innerHTML=\`
-      <div class="stat-card"><div class="stat-label">State</div><div class="stat-value" style="color:\${d.state==='connected'?'#3fb950':'#f85149'}">\${d.state}</div></div>
-      <div class="stat-card"><div class="stat-label">Uptime</div><div class="stat-value">\${Math.floor(d.uptime_sec/60)}m</div></div>
-      <div class="stat-card"><div class="stat-label">Reconnects</div><div class="stat-value">\${d.reconnects}</div></div>
-      <div class="stat-card"><div class="stat-label">DNS Queries</div><div class="stat-value">\${d.dns_queries}</div></div>
-    \`;
+    var color = (d.state==='connected') ? '#3fb950' : '#f85149';
+    var html = '';
+    html += '<div class="stat-card"><div class="stat-label">State</div><div class="stat-value" style="color:'+color+'">'+d.state+'</div></div>';
+    html += '<div class="stat-card"><div class="stat-label">Uptime</div><div class="stat-value">'+Math.floor(d.uptime_sec/60)+'m</div></div>';
+    html += '<div class="stat-card"><div class="stat-label">Reconnects</div><div class="stat-value">'+d.reconnects+'</div></div>';
+    html += '<div class="stat-card"><div class="stat-label">DNS Queries</div><div class="stat-value">'+d.dns_queries+'</div></div>';
+    document.getElementById('statsRow').innerHTML=html;
   }catch(e){console.error(e)}
 }
 
 async function loadProxies(){
   try{
-    const r=await fetch('/api/proxies');
-    const d=await r.json();
-    const container=document.getElementById('groupsContainer');
+    var r=await fetch('/api/proxies');
+    var d=await r.json();
+    var container=document.getElementById('groupsContainer');
     if(!d.proxies||d.proxies.length===0){
       container.innerHTML='<div class="empty">No proxy groups</div>';
       return;
     }
-    container.innerHTML=d.proxies.map(g=>{
-      const btns=g.all.map(p=>{
-        const cls='group-btn '+p.toLowerCase().replace(/_/g,'-')+(g.now===p?' active':'');
-        return \`<button class="\${cls}" onclick="switchProxy('\${g.name}','\${p}')">\${p}</button>\`;
-      }).join('');
-      return \`<div class="group-card"><div class="group-name">\${g.name}</div><div class="group-buttons">\${btns}</div></div>\`;
-    }).join('');
+    var html='';
+    d.proxies.forEach(function(g){
+      var btns='';
+      g.all.forEach(function(p){
+        var cls='group-btn '+p.toLowerCase().replace(/_/g,'-')+(g.now===p?' active':'');
+        btns += '<button class="'+cls+'" onclick="switchProxy(\''+g.name+'\',\''+p+'\')">'+p+'</button>';
+      });
+      html += '<div class="group-card"><div class="group-name">'+g.name+'</div><div class="group-buttons">'+btns+'</div></div>';
+    });
+    container.innerHTML=html;
   }catch(e){console.error(e)}
 }
 
 async function switchProxy(group,name){
   try{
-    const r=await fetch('/api/proxies/'+encodeURIComponent(group),{
+    var r=await fetch('/api/proxies/'+encodeURIComponent(group),{
       method:'PUT',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name})
+      body:JSON.stringify({name:name})
     });
     if(!r.ok)throw new Error(await r.text());
     loadProxies();
@@ -2013,43 +2017,45 @@ async function switchProxy(group,name){
 
 async function loadConnections(){
   try{
-    const r=await fetch('/api/connections');
-    const d=await r.json();
-    const body=document.getElementById('connBody');
+    var r=await fetch('/api/connections');
+    var d=await r.json();
+    var body=document.getElementById('connBody');
     if(!d.connections||d.connections.length===0){
       body.innerHTML='<tr><td colspan="7" class="empty">No active connections</td></tr>';
       return;
     }
-    body.innerHTML=d.connections.map(c=>{
-      const t=new Date(c.start);
-      const ts=t.toTimeString().slice(0,8);
-      const dst=c.domain||c.dstHost;
-      const proxyCls='tag tag-'+c.proxy;
-      return \`<tr>
-        <td>\${ts}</td>
-        <td>\${c.srcIP}</td>
-        <td>\${dst}:\${c.dstPort}</td>
-        <td style="color:#8b949e">\${c.rule}</td>
-        <td><span class="\${proxyCls}">\${c.proxy}</span></td>
-        <td class="bytes">\${fmtBytes(c.up)}</td>
-        <td class="bytes">\${fmtBytes(c.down)}</td>
-      </tr>\`;
-    }).join('');
+    var html='';
+    d.connections.forEach(function(c){
+      var t=new Date(c.start);
+      var ts=t.toTimeString().slice(0,8);
+      var dst=c.domain||c.dstHost;
+      var proxyCls='tag tag-'+c.proxy;
+      html += '<tr>';
+      html += '<td>'+ts+'</td>';
+      html += '<td>'+c.srcIP+'</td>';
+      html += '<td>'+dst+':'+c.dstPort+'</td>';
+      html += '<td style="color:#8b949e">'+c.rule+'</td>';
+      html += '<td><span class="'+proxyCls+'">'+c.proxy+'</span></td>';
+      html += '<td class="bytes">'+fmtBytes(c.up)+'</td>';
+      html += '<td class="bytes">'+fmtBytes(c.down)+'</td>';
+      html += '</tr>';
+    });
+    body.innerHTML=html;
   }catch(e){console.error(e)}
 }
 
-let logSource=null;
+var logSource=null;
 function connectLogs(){
   if(logSource){logSource.close()}
-  const box=document.getElementById('logbox');
+  var box=document.getElementById('logbox');
   box.textContent='';
-  fetch('/api/logs').then(r=>{
-    const reader=r.body.getReader();
-    const dec=new TextDecoder();
+  fetch('/api/logs').then(function(r){
+    var reader=r.body.getReader();
+    var dec=new TextDecoder();
     function read(){
-      reader.read().then(({done,value})=>{
-        if(done){setTimeout(connectLogs,2000);return}
-        box.textContent+=dec.decode(value);
+      reader.read().then(function(res){
+        if(res.done){setTimeout(connectLogs,2000);return}
+        box.textContent+=dec.decode(res.value);
         box.scrollTop=box.scrollHeight;
         if(box.textContent.length>200000)box.textContent=box.textContent.slice(-150000);
         read();
@@ -2061,8 +2067,8 @@ function connectLogs(){
 
 async function loadConfig(){
   try{
-    const r=await fetch('/api/config');
-    const d=await r.json();
+    var r=await fetch('/api/config');
+    var d=await r.json();
     document.getElementById('configBox').textContent=JSON.stringify(d,null,2);
   }catch(e){}
 }
