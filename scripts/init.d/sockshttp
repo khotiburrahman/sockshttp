@@ -1,0 +1,37 @@
+#!/bin/sh /etc/rc.common
+# /etc/init.d/sockshttp
+START=99
+STOP=10
+USE_PROCD=1
+
+PROG=/usr/bin/sockshttp
+CONF=/etc/config/sockshttp.yaml
+ROUTING=/usr/bin/qtun-routing
+PIDFILE=/var/run/sockshttp.pid
+WATCH_PIDFILE=/var/run/qtun-routing.pid
+
+start_service() {
+    procd_open_instance
+    procd_set_param command "$PROG" -config "$CONF"
+    procd_set_param pidfile "$PIDFILE"
+    procd_set_param respawn 3600 5 5
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_set_param limits nofile=65535
+    procd_close_instance
+
+    # Routing watchdog: apply saat app up, revert saat app mati
+    "$ROUTING" watch 5 >/dev/null 2>&1 &
+    echo $! > "$WATCH_PIDFILE"
+}
+
+stop_service() {
+    # 1) Matikan watcher DULU (biar tidak re-apply)
+    if [ -f "$WATCH_PIDFILE" ]; then
+        kill "$(cat "$WATCH_PIDFILE")" 2>/dev/null
+        rm -f "$WATCH_PIDFILE"
+    fi
+    # 2) Hapus rules sebelum app benar-benar mati
+    sleep 1
+    "$ROUTING" stop
+}
