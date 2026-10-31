@@ -1,0 +1,5 @@
+/dist/
+*.log
+*.pid
+sockshttp
+sockshttp-linux-*
