@@ -1,0 +1,130 @@
+# ============================================================
+# SocksHTTP-Go — konfigurasi lengkap
+# Path: /etc/config/sockshttp.yaml
+# ============================================================
+
+# --- Server SSH tujuan ---
+server: nusa.vpnstore28.my.id
+server_port: 443
+username: user-anda
+password: pass-anda
+# key_path: /etc/config/id_ed25519   # (opsional) auth key selain password
+
+# --- Mode tunnel ---
+# direct  = konek TCP lurus ke server:port
+# proxy   = lewat bug host (proxy_host:proxy_port) dulu
+tunnel_type: proxy
+
+proxy_host: edu.ruangguru.com
+proxy_port: 80
+
+use_default_payload: false
+custom_payload: |
+  GET / HTTP/1.1
+  Host: edu.ruangguru.com
+  Connection: Keep-Alive
+
+  PATCH / HTTP/1.1
+  Host: nusa.vpnstore28.my.id
+  Upgrade: websocket
+
+  [split]HTTP/ 69
+
+# --- Koneksi ---
+pinger: 3                 # detik, 0 = nonaktif
+no_delay: true            # TCP_NODELAY
+
+# --- Listener SOCKS5 (belum dipakai di app; placeholder) ---
+socks5:
+  bind: 127.0.0.1
+  port: 7777
+
+# --- Fake-IP DNS ---
+dns:
+  enabled: true
+  bind: 0.0.0.0:1053
+  upstream: 1.1.1.1:53
+
+# --- Listener REDIRECT (iptables REDIRECT ke sini) ---
+redirect:
+  bind: 127.0.0.1:7892
+
+# --- API/Web UI ---
+api:
+  bind: 0.0.0.0:9090
+  secret: ""              # KOSONGKAN hanya jika LAN-only!
+
+# ============================================================
+# PROXY GROUPS — bisa switch via Web UI / API
+# ============================================================
+proxy-groups:
+  - name: DEFAULT
+    type: select
+    proxies: [TUNNEL, DIRECT, REJECT]
+    default: TUNNEL
+  - name: HP-ISTRI
+    type: select
+    proxies: [TUNNEL, DIRECT, REJECT]
+    default: TUNNEL
+  - name: LAPTOP-KERJA
+    type: select
+    proxies: [TUNNEL, DIRECT, REJECT]
+    default: TUNNEL
+  - name: TV-ANDROID
+    type: select
+    proxies: [TUNNEL, DIRECT, REJECT]
+    default: DIRECT
+  - name: IOT-CAMERA
+    type: select
+    proxies: [TUNNEL, DIRECT, REJECT]
+    default: REJECT
+
+# ============================================================
+# RULES — urutan penting, MATCH harus paling akhir
+# ============================================================
+rules:
+  # Jaringan lokal — selalu DIRECT
+  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,224.0.0.0/4,DIRECT,no-resolve
+
+  # Per-device routing (SRC-IP-CIDR harus di atas MATCH)
+  - SRC-IP-CIDR,192.168.1.100/32,HP-ISTRI
+  - SRC-IP-CIDR,192.168.1.101/32,LAPTOP-KERJA
+  - SRC-IP-CIDR,192.168.1.150/32,TV-ANDROID
+  - SRC-IP-CIDR,192.168.1.200/32,IOT-CAMERA
+
+  # Domain override
+  - DOMAIN-SUFFIX,netflix.com,REJECT
+  - DOMAIN-KEYWORD,ads,REJECT
+  - DOMAIN,whatsapp.com,DIRECT
+
+  # Fallback
+  - MATCH,DEFAULT
+
+# --- Reconnect ---
+reconnect:
+  enabled: true
+  initial_delay: 2s
+  max_delay: 60s
+
+# --- Health check ---
+health_check:
+  enabled: true
+  interval: 30s
+  timeout: 10s
+  target: 1.1.1.1:53
+  failure_threshold: 3
+
+# --- Log ---
+log:
+  level: info             # error | warn | info | debug
+  file: /var/log/sockshttp.log
+  max_size_mb: 10
+  max_backups: 3
+
+# --- Persistence ---
+state_file: /etc/qtun/run/sockshttp-state.json
+pid_file: /var/run/sockshttp.pid
