@@ -179,26 +179,22 @@ func (t *SSHTunnel) openRawConn() (net.Conn, error) {
 
 	if readResponse {
 		br := bufio.NewReader(conn)
+		conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 
-		// Timeout khusus untuk baca header response proxy
-		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-
-		// Baca baris pertama (status line)
+		// ==== 1. BACA STATUS LINE ====
 		first, err := br.ReadString('\n')
 		if err != nil {
 			conn.Close()
-			return nil, fmt.Errorf("proxy tidak merespon dalam 10s: %w", err)
+			return nil, fmt.Errorf("proxy tidak merespon: %w", err)
 		}
 		t.logger.Info("Proxy response: %s", strings.TrimRight(first, "\r\n"))
 
-		// Baca sisa header — tapi LENIENT: jangan fail kalau ada error
-		// (SocksHttp tidak peduli header lengkap atau tidak, karena server
-		//  mungkin sudah langsung masuk mode WebSocket passthrough)
-		for i := 0; i < 100; i++ {
+		// ==== 2. BACA HEADER, deteksi Content-Length / Transfer-Encoding ====
+		contentLength := int64(-1)
+		isChunked := false
+		for i := 0; i < 200; i++ {
 			line, err := br.ReadString('\n')
 			if err != nil {
-				// EOF / timeout — lanjut saja
-				t.logger.Debug("Header loop selesai lebih awal: %v", err)
 				break
 			}
 			trimmed := strings.TrimRight(line, "\r\n")
@@ -206,20 +202,85 @@ func (t *SSHTunnel) openRawConn() (net.Conn, error) {
 				break
 			}
 			t.logger.Debug("Proxy header: %s", trimmed)
+			lower := strings.ToLower(trimmed)
+			if strings.HasPrefix(lower, "content-length:") {
+				v := strings.TrimSpace(trimmed[len("content-length:"):])
+				if n, e := strconv.ParseInt(v, 10, 64); e == nil {
+					contentLength = n
+				}
+			}
+			if strings.HasPrefix(lower, "transfer-encoding:") && strings.Contains(lower, "chunked") {
+				isChunked = true
+			}
 		}
 
-		// Reset deadline sebelum handshake SSH
-		conn.SetReadDeadline(time.Time{})
+		// ==== 3. DRAIN BODY — INI YANG HILANG SELAMA INI ====
+		conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		drained := int64(0)
 
+		if contentLength > 0 {
+			n, _ := io.CopyN(io.Discard, br, contentLength)
+			drained = n
+			t.logger.Info("Drained %d bytes body (Content-Length)", drained)
+		} else if isChunked {
+			for i := 0; i < 10000; i++ {
+				sizeLine, err := br.ReadString('\n')
+				if err != nil {
+					t.logger.Debug("Chunked drain stopped: %v", err)
+					break
+				}
+				sizeLine = strings.TrimSpace(sizeLine)
+				if idx := strings.IndexByte(sizeLine, ';'); idx >= 0 {
+					sizeLine = sizeLine[:idx]
+				}
+				if sizeLine == "" {
+					continue
+				}
+				chunkSize, err := strconv.ParseInt(sizeLine, 16, 64)
+				if err != nil {
+					t.logger.Debug("Chunk parse fail: %v (line=%q)", err, sizeLine)
+					break
+				}
+				if chunkSize == 0 {
+					// baca trailer sampai kosong
+					for j := 0; j < 20; j++ {
+						tl, terr := br.ReadString('\n')
+						if terr != nil || strings.TrimRight(tl, "\r\n") == "" {
+							break
+						}
+					}
+					break
+				}
+				n, cerr := io.CopyN(io.Discard, br, chunkSize)
+				drained += n
+				if cerr != nil {
+					break
+				}
+				// trailing CRLF setelah chunk data
+				br.ReadString('\n')
+			}
+			t.logger.Info("Drained %d bytes body (chunked)", drained)
+		} else {
+			// Tidak ada CL/TE: baca sampai timeout
+			buf := make([]byte, 4096)
+			for {
+				n, rerr := br.Read(buf)
+				if n > 0 {
+					drained += int64(n)
+				}
+				if rerr != nil {
+					break
+				}
+			}
+			t.logger.Info("Drained %d bytes body (timeout/unknown)", drained)
+		}
+
+		// ==== 4. RESET DEADLINE, siap untuk SSH handshake ====
+		conn.SetReadDeadline(time.Time{})
 		t.logger.Info("Ignoring proxy response, forcing connection..")
 		return &bufioConn{Conn: conn, r: br}, nil
 	}
 	return conn, nil
-}
-
-type bufioConn struct {
-	net.Conn
-	r *bufio.Reader
 }
 
 func (c *bufioConn) Read(b []byte) (int, error) { return c.r.Read(b) }
