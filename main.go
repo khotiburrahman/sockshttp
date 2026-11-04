@@ -116,7 +116,7 @@ func main() {
 	proxyMgr := NewProxyManager(cfg.ProxyGroups, cfg.StateFile)
 	tracker := NewConnTracker()
 	dns := NewDNSServer(cfg, logger, pool, tunnel)
-	socks5 := NewSOCKS5Server(cfg, logger, tunnel, proxyMgr)
+	socks5 := NewSOCKS5Server(cfg, logger, tunnel, proxyMgr, pool)
 
 	// =========================================================
 	// 6. START TUNNEL (background, auto-reconnect)
