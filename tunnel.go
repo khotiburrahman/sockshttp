@@ -292,7 +292,7 @@ func (t *SSHTunnel) cleanup() {
 }
 
 func (t *SSHTunnel) Run(ctx context.Context) {
-	backoff := t.cfg.Reconnect.InitialDelay
+	backoff := t.cfg.Reconnect.InitialDelay.D()
 	for {
 		if ctx.Err() != nil {
 			t.cleanup()
@@ -309,7 +309,7 @@ func (t *SSHTunnel) Run(ctx context.Context) {
 
 		t.setState("connected")
 		t.lastErr.Store("")
-		backoff = t.cfg.Reconnect.InitialDelay
+		backoff = t.cfg.Reconnect.InitialDelay.D()
 
 		select {
 		case <-ctx.Done():
@@ -342,8 +342,8 @@ func (t *SSHTunnel) waitBackoff(ctx context.Context, backoff *time.Duration) {
 	case <-time.After(wait):
 	}
 	*backoff *= 2
-	if *backoff > t.cfg.Reconnect.MaxDelay {
-		*backoff = t.cfg.Reconnect.MaxDelay
+	if *backoff > t.cfg.Reconnect.MaxDelay.D() {
+		*backoff = t.cfg.Reconnect.MaxDelay.D()
 	}
 }
 
@@ -353,7 +353,7 @@ func (t *SSHTunnel) StartHealthLoop(ctx context.Context) {
 	}
 	go func() {
 		failures := 0
-		tk := time.NewTicker(t.cfg.HealthCheck.Interval)
+		tk := time.NewTicker(t.cfg.HealthCheck.Interval.D())
 		defer tk.Stop()
 		for {
 			select {
@@ -365,7 +365,7 @@ func (t *SSHTunnel) StartHealthLoop(ctx context.Context) {
 			if c == nil {
 				continue
 			}
-			conn, err := dialSSHWithTimeout(c, "tcp", t.cfg.HealthCheck.Target, t.cfg.HealthCheck.Timeout)
+			conn, err := dialSSHWithTimeout(c, "tcp", t.cfg.HealthCheck.Target, t.cfg.HealthCheck.Timeout.D())
 			if err != nil {
 				failures++
 				t.logger.Warn("Health check gagal (%d/%d): %v", failures, t.cfg.HealthCheck.FailureThreshold, err)
