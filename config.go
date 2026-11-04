@@ -15,7 +15,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
- "time"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -37,6 +37,43 @@ const (
 	SOOriginalDst  = 80
 )
 
+// =========================================================
+// Duration: menerima YAML int (nanodetik) ATAU string ("2s")
+// =========================================================
+type Duration time.Duration
+
+func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
+	// Coba integer dulu (nanodetik)
+	var n int64
+	if err := value.Decode(&n); err == nil {
+		*d = Duration(n)
+		return nil
+	}
+	// Coba string ("2s", "500ms", "1h30m")
+	var s string
+	if err := value.Decode(&s); err == nil {
+		parsed, err := time.ParseDuration(s)
+		if err != nil {
+			return fmt.Errorf("invalid duration %q: %w", s, err)
+		}
+		*d = Duration(parsed)
+		return nil
+	}
+	return fmt.Errorf("cannot parse duration: %q", value.Value)
+}
+
+func (d Duration) MarshalYAML() (interface{}, error) {
+	return time.Duration(d).String(), nil
+}
+
+// D() mengembalikan time.Duration untuk dipakai di kode
+func (d Duration) D() time.Duration {
+	return time.Duration(d)
+}
+
+// =========================================================
+// Config
+// =========================================================
 type Config struct {
 	Server     string `yaml:"server"`
 	ServerPort int    `yaml:"server_port"`
@@ -77,17 +114,17 @@ type Config struct {
 	Rules       []string           `yaml:"rules"`
 
 	Reconnect struct {
-		Enabled      bool          `yaml:"enabled"`
-		InitialDelay time.Duration `yaml:"initial_delay"`
-		MaxDelay     time.Duration `yaml:"max_delay"`
+		Enabled      bool     `yaml:"enabled"`
+		InitialDelay Duration `yaml:"initial_delay"`
+		MaxDelay     Duration `yaml:"max_delay"`
 	} `yaml:"reconnect"`
 
 	HealthCheck struct {
-		Enabled          bool          `yaml:"enabled"`
-		Interval         time.Duration `yaml:"interval"`
-		Timeout          time.Duration `yaml:"timeout"`
-		Target           string        `yaml:"target"`
-		FailureThreshold int           `yaml:"failure_threshold"`
+		Enabled          bool     `yaml:"enabled"`
+		Interval         Duration `yaml:"interval"`
+		Timeout          Duration `yaml:"timeout"`
+		Target           string   `yaml:"target"`
+		FailureThreshold int      `yaml:"failure_threshold"`
 	} `yaml:"health_check"`
 
 	Log struct {
@@ -125,11 +162,11 @@ func DefaultConfig() *Config {
 	c.Redirect.Bind = "127.0.0.1:7892"
 	c.API.Bind = "0.0.0.0:9090"
 	c.Reconnect.Enabled = true
-	c.Reconnect.InitialDelay = 2 * time.Second
-	c.Reconnect.MaxDelay = 60 * time.Second
+	c.Reconnect.InitialDelay = Duration(2 * time.Second)
+	c.Reconnect.MaxDelay = Duration(60 * time.Second)
 	c.HealthCheck.Enabled = true
-	c.HealthCheck.Interval = 30 * time.Second
-	c.HealthCheck.Timeout = 10 * time.Second
+	c.HealthCheck.Interval = Duration(30 * time.Second)
+	c.HealthCheck.Timeout = Duration(10 * time.Second)
 	c.HealthCheck.Target = "1.1.1.1:53"
 	c.HealthCheck.FailureThreshold = 3
 	c.Log.Level = "info"
