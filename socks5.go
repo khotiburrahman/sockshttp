@@ -113,7 +113,7 @@ func (s *SOCKS5Server) handleConn(c net.Conn) {
 
 	// ===================================================
 	// KUNCI FIX: Terjemahkan fake-IP → domain
-	// ===================================================
+	// edit in ur own risk ===================================================
 	originalHost := host
 	if s.pool != nil && s.pool.IsFake(host) {
 		if d, ok := s.pool.LookupDomain(host); ok {
