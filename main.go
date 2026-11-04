@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"encoding/pem"
 	"encoding/xml"
 	"errors"
 	"flag"
@@ -22,7 +23,6 @@ import (
 	"io"
 	"log"
 	"math/big"
-	mrand "math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -43,7 +43,7 @@ import (
 )
 
 // =====================================================================
-// SECTION 1: TYPES & CONFIG
+// SECTION 1: CONSTANTS & CONFIG
 // =====================================================================
 
 const (
@@ -70,7 +70,7 @@ type Config struct {
 	Password   string `yaml:"password"`
 	KeyPath    string `yaml:"key_path,omitempty"`
 
-	TunnelType        string `yaml:"tunnel_type"` // direct | proxy
+	TunnelType        string `yaml:"tunnel_type"`
 	ProxyHost         string `yaml:"proxy_host"`
 	ProxyPort         int    `yaml:"proxy_port"`
 	UseDefaultPayload bool   `yaml:"use_default_payload"`
@@ -511,7 +511,7 @@ func injectSplit(payload string, out io.Writer) error {
 }
 
 // =====================================================================
-// SECTION 4: SSH TUNNEL
+// SECTION 4: SSH TUNNEL (dengan fix dialSSHWithTimeout)
 // =====================================================================
 
 type monitoredConn struct {
@@ -537,6 +537,40 @@ func (c *monitoredConn) Write(b []byte) (int, error) {
 func (c *monitoredConn) Close() error {
 	c.once.Do(func() { c.onClose(net.ErrClosed) })
 	return c.Conn.Close()
+}
+
+// dialSSHWithTimeout membungkus ssh.Client.Dial dengan timeout.
+// ssh.Client tidak punya method DialTimeout/DialContext, jadi pakai pattern
+// goroutine + channel + time.After. Conn yang telat datang akan ditutup.
+func dialSSHWithTimeout(client *ssh.Client, network, addr string, timeout time.Duration) (net.Conn, error) {
+	type result struct {
+		conn net.Conn
+		err  error
+	}
+	resultCh := make(chan result, 1)
+
+	go func() {
+		conn, err := client.Dial(network, addr)
+		resultCh <- result{conn, err}
+	}()
+
+	select {
+	case r := <-resultCh:
+		return r.conn, r.err
+	case <-time.After(timeout):
+		// Cleanup in-flight dial biar tidak bocor goroutine/conn
+		go func() {
+			select {
+			case r := <-resultCh:
+				if r.conn != nil {
+					r.conn.Close()
+				}
+			case <-time.After(30 * time.Second):
+				// Batas maksimal cleanup
+			}
+		}()
+		return nil, fmt.Errorf("SSH dial timeout setelah %s ke %s", timeout, addr)
+	}
 }
 
 type SSHTunnel struct {
@@ -579,7 +613,7 @@ func (t *SSHTunnel) Dial(network, addr string) (net.Conn, error) {
 	if c == nil {
 		return nil, errors.New("tunnel tidak aktif")
 	}
-	return c.DialTimeout(network, addr, 15*time.Second)
+	return dialSSHWithTimeout(c, network, addr, 15*time.Second)
 }
 
 func (t *SSHTunnel) buildAuth() ([]ssh.AuthMethod, error) {
@@ -781,7 +815,7 @@ func (t *SSHTunnel) Run(ctx context.Context) {
 }
 
 func (t *SSHTunnel) waitBackoff(ctx context.Context, backoff *time.Duration) {
-	jitter := time.Duration(mrand.Int63n(int64(*backoff)/2 + 1))
+	jitter := time.Duration(rand.Int63n(int64(*backoff)/2 + 1))
 	wait := *backoff + jitter
 	t.logger.Info("Reconnect dalam %s...", wait)
 	select {
@@ -813,7 +847,7 @@ func (t *SSHTunnel) StartHealthLoop(ctx context.Context) {
 			if c == nil {
 				continue
 			}
-			conn, err := c.DialTimeout("tcp", t.cfg.HealthCheck.Target, t.cfg.HealthCheck.Timeout)
+			conn, err := dialSSHWithTimeout(c, "tcp", t.cfg.HealthCheck.Target, t.cfg.HealthCheck.Timeout)
 			if err != nil {
 				failures++
 				t.logger.Warn("Health check gagal (%d/%d): %v", failures, t.cfg.HealthCheck.FailureThreshold, err)
@@ -1058,31 +1092,6 @@ func (d *DNSServer) buildEmptyResponse(q []byte, questionEnd, rcode int) []byte 
 	return resp
 }
 
-func (d *DNSServer) ResolveViaTunnel(domain string) (net.IP, error) {
-	q := d.buildDNSQuery(domain)
-	upstream := d.cfg.DNS.Upstream
-	if !strings.Contains(upstream, ":") {
-		upstream += ":53"
-	}
-	c, err := d.tunnel.Dial("tcp", upstream)
-	if err != nil {
-		return nil, err
-	}
-	defer c.Close()
-	c.SetDeadline(time.Now().Add(5 * time.Second))
-	c.Write([]byte{byte(len(q) >> 8), byte(len(q))})
-	c.Write(q)
-	h := make([]byte, 2)
-	if _, err := io.ReadFull(c, h); err != nil {
-		return nil, err
-	}
-	resp := make([]byte, int(h[0])<<8|int(h[1]))
-	if _, err := io.ReadFull(c, resp); err != nil {
-		return nil, err
-	}
-	return d.parseAResponse(resp)
-}
-
 func (d *DNSServer) buildDNSQuery(domain string) []byte {
 	txID := make([]byte, 2)
 	rand.Read(txID)
@@ -1175,9 +1184,6 @@ func parseRule(s string) (*Rule, error) {
 	r := &Rule{Type: strings.ToUpper(strings.TrimSpace(parts[0])), raw: s}
 	switch r.Type {
 	case RuleMatch:
-		if len(parts) < 2 {
-			return nil, fmt.Errorf("MATCH needs target")
-		}
 		r.Target = strings.TrimSpace(parts[1])
 		r.Value = ""
 	case RuleSrcIPCIDR, RuleIPCIDR:
@@ -1234,7 +1240,7 @@ func (r *Rule) Match(srcIP, dstIP, domain string) bool {
 }
 
 // =====================================================================
-// SECTION 7: PROXY MANAGER (groups + state)
+// SECTION 7: PROXY MANAGER
 // =====================================================================
 
 type ProxyGroup struct {
@@ -1403,7 +1409,7 @@ func NewConnTracker() *ConnTracker {
 }
 
 func (ct *ConnTracker) New(srcIP, domain, dstHost string, dstPort int, rule, chain, proxy string) *Connection {
-	id := fmt.Sprintf("%d-%d", time.Now().UnixNano(), mrand.Int31())
+	id := fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Int31())
 	c := &Connection{
 		ID:        id,
 		StartTime: time.Now(),
@@ -1435,15 +1441,6 @@ func (ct *ConnTracker) Close(id string) {
 	ct.mu.Unlock()
 }
 
-func (ct *ConnTracker) AddBytes(id string, up, down int64) {
-	ct.mu.Lock()
-	if c, ok := ct.conns[id]; ok {
-		c.BytesUp += up
-		c.BytesDown += down
-	}
-	ct.mu.Unlock()
-}
-
 func (ct *ConnTracker) List() []*Connection {
 	ct.mu.RLock()
 	defer ct.mu.RUnlock()
@@ -1465,7 +1462,7 @@ func (ct *ConnTracker) CloseAll() {
 }
 
 // =====================================================================
-// SECTION 9: REDIRECT LISTENER (SO_ORIGINAL_DST)
+// SECTION 9: REDIRECT LISTENER
 // =====================================================================
 
 func getOriginalDst(conn *net.TCPConn) (string, error) {
@@ -1637,7 +1634,7 @@ func (r *Router) handleConn(raw net.Conn) {
 			return
 		}
 		defer remote.Close()
-		r.pipe(raw, remote, track)
+		r.pipe(raw, remote)
 
 	case ProxyTunnel:
 		target := ""
@@ -1652,33 +1649,29 @@ func (r *Router) handleConn(raw net.Conn) {
 			return
 		}
 		defer remote.Close()
-		r.pipe(raw, remote, track)
+		r.pipe(raw, remote)
 
 	default:
 		r.logger.Warn("Unknown proxy: %s", proxy)
 	}
 }
 
-func closeWrite(c net.Conn) {
-	if cw, ok := c.(interface{ CloseWrite() error }); ok {
-		_ = cw.CloseWrite()
-	}
-}
-
-func (r *Router) pipe(a, b net.Conn, track *Connection) {
+func (r *Router) pipe(a, b net.Conn) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		n, _ := io.Copy(b, a)
-		atomic.AddInt64(&track.BytesUp, n)
-		closeWrite(b)
+		io.Copy(b, a)
+		if tc, ok := b.(*net.TCPConn); ok {
+			tc.CloseWrite()
+		}
 	}()
 	go func() {
 		defer wg.Done()
-		n, _ := io.Copy(a, b)
-		atomic.AddInt64(&track.BytesDown, n)
-		closeWrite(a)
+		io.Copy(a, b)
+		if tc, ok := a.(*net.TCPConn); ok {
+			tc.CloseWrite()
+		}
 	}()
 	wg.Wait()
 }
@@ -1891,7 +1884,6 @@ main{padding:20px;max-width:1400px;margin:0 auto}
 table{width:100%;border-collapse:collapse;background:#161b22;border:1px solid #30363d;border-radius:8px;overflow:hidden}
 th{background:#21262d;padding:10px 12px;text-align:left;font-weight:600;color:#8b949e;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
 td{padding:10px 12px;border-top:1px solid #21262d;font-family:ui-monospace,monospace;font-size:12px}
-td.mono{font-family:ui-monospace,monospace}
 .tag{padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
 .tag-TUNNEL{background:#1f6feb22;color:#58a6ff}
 .tag-DIRECT{background:#23863622;color:#3fb950}
@@ -1955,8 +1947,8 @@ function fmtBytes(n){
 }
 
 function showTab(name,btn){
-  document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active')});
-  document.querySelectorAll('nav button').forEach(function(b){b.classList.remove('active')});
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
   document.getElementById('tab-'+name).classList.add('active');
   btn.classList.add('active');
   if(name==='logs')connectLogs();
@@ -1965,47 +1957,42 @@ function showTab(name,btn){
 
 async function loadStatus(){
   try{
-    var r=await fetch('/api/status');
-    var d=await r.json();
-    var badge=document.getElementById('stateBadge');
+    const r=await fetch('/api/status');
+    const d=await r.json();
+    const badge=document.getElementById('stateBadge');
     badge.textContent=d.state;
     badge.className='state-badge state-'+d.state;
     document.getElementById('serverInfo').textContent=d.server||'';
-    var color = (d.state==='connected') ? '#3fb950' : '#f85149';
-    var html = '';
-    html += '<div class="stat-card"><div class="stat-label">State</div><div class="stat-value" style="color:'+color+'">'+d.state+'</div></div>';
-    html += '<div class="stat-card"><div class="stat-label">Uptime</div><div class="stat-value">'+Math.floor(d.uptime_sec/60)+'m</div></div>';
-    html += '<div class="stat-card"><div class="stat-label">Reconnects</div><div class="stat-value">'+d.reconnects+'</div></div>';
-    html += '<div class="stat-card"><div class="stat-label">DNS Queries</div><div class="stat-value">'+d.dns_queries+'</div></div>';
-    document.getElementById('statsRow').innerHTML=html;
+    document.getElementById('statsRow').innerHTML=''+
+      '<div class="stat-card"><div class="stat-label">State</div><div class="stat-value" style="color:'+(d.state==='connected'?'#3fb950':'#f85149')+'">'+d.state+'</div></div>'+
+      '<div class="stat-card"><div class="stat-label">Uptime</div><div class="stat-value">'+Math.floor(d.uptime_sec/60)+'m</div></div>'+
+      '<div class="stat-card"><div class="stat-label">Reconnects</div><div class="stat-value">'+d.reconnects+'</div></div>'+
+      '<div class="stat-card"><div class="stat-label">DNS Queries</div><div class="stat-value">'+d.dns_queries+'</div></div>';
   }catch(e){console.error(e)}
 }
 
 async function loadProxies(){
   try{
-    var r=await fetch('/api/proxies');
-    var d=await r.json();
-    var container=document.getElementById('groupsContainer');
+    const r=await fetch('/api/proxies');
+    const d=await r.json();
+    const container=document.getElementById('groupsContainer');
     if(!d.proxies||d.proxies.length===0){
       container.innerHTML='<div class="empty">No proxy groups</div>';
       return;
     }
-    var html='';
-    d.proxies.forEach(function(g){
-      var btns='';
-      g.all.forEach(function(p){
+    container.innerHTML=d.proxies.map(function(g){
+      var btns=g.all.map(function(p){
         var cls='group-btn '+p.toLowerCase().replace(/_/g,'-')+(g.now===p?' active':'');
-        btns += '<button class="'+cls+'" onclick="switchProxy(\''+g.name+'\',\''+p+'\')">'+p+'</button>';
-      });
-      html += '<div class="group-card"><div class="group-name">'+g.name+'</div><div class="group-buttons">'+btns+'</div></div>';
-    });
-    container.innerHTML=html;
+        return '<button class="'+cls+'" onclick="switchProxy(\''+g.name+'\',\''+p+'\')">'+p+'</button>';
+      }).join('');
+      return '<div class="group-card"><div class="group-name">'+g.name+'</div><div class="group-buttons">'+btns+'</div></div>';
+    }).join('');
   }catch(e){console.error(e)}
 }
 
 async function switchProxy(group,name){
   try{
-    var r=await fetch('/api/proxies/'+encodeURIComponent(group),{
+    const r=await fetch('/api/proxies/'+encodeURIComponent(group),{
       method:'PUT',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({name:name})
@@ -2017,41 +2004,38 @@ async function switchProxy(group,name){
 
 async function loadConnections(){
   try{
-    var r=await fetch('/api/connections');
-    var d=await r.json();
-    var body=document.getElementById('connBody');
+    const r=await fetch('/api/connections');
+    const d=await r.json();
+    const body=document.getElementById('connBody');
     if(!d.connections||d.connections.length===0){
       body.innerHTML='<tr><td colspan="7" class="empty">No active connections</td></tr>';
       return;
     }
-    var html='';
-    d.connections.forEach(function(c){
+    body.innerHTML=d.connections.map(function(c){
       var t=new Date(c.start);
       var ts=t.toTimeString().slice(0,8);
       var dst=c.domain||c.dstHost;
-      var proxyCls='tag tag-'+c.proxy;
-      html += '<tr>';
-      html += '<td>'+ts+'</td>';
-      html += '<td>'+c.srcIP+'</td>';
-      html += '<td>'+dst+':'+c.dstPort+'</td>';
-      html += '<td style="color:#8b949e">'+c.rule+'</td>';
-      html += '<td><span class="'+proxyCls+'">'+c.proxy+'</span></td>';
-      html += '<td class="bytes">'+fmtBytes(c.up)+'</td>';
-      html += '<td class="bytes">'+fmtBytes(c.down)+'</td>';
-      html += '</tr>';
-    });
-    body.innerHTML=html;
+      return '<tr>'+
+        '<td>'+ts+'</td>'+
+        '<td>'+c.srcIP+'</td>'+
+        '<td>'+dst+':'+c.dstPort+'</td>'+
+        '<td style="color:#8b949e">'+c.rule+'</td>'+
+        '<td><span class="tag tag-'+c.proxy+'">'+c.proxy+'</span></td>'+
+        '<td class="bytes">'+fmtBytes(c.up)+'</td>'+
+        '<td class="bytes">'+fmtBytes(c.down)+'</td>'+
+        '</tr>';
+    }).join('');
   }catch(e){console.error(e)}
 }
 
-var logSource=null;
+let logSource=null;
 function connectLogs(){
   if(logSource){logSource.close()}
-  var box=document.getElementById('logbox');
+  const box=document.getElementById('logbox');
   box.textContent='';
   fetch('/api/logs').then(function(r){
-    var reader=r.body.getReader();
-    var dec=new TextDecoder();
+    const reader=r.body.getReader();
+    const dec=new TextDecoder();
     function read(){
       reader.read().then(function(res){
         if(res.done){setTimeout(connectLogs,2000);return}
@@ -2067,8 +2051,8 @@ function connectLogs(){
 
 async function loadConfig(){
   try{
-    var r=await fetch('/api/config');
-    var d=await r.json();
+    const r=await fetch('/api/config');
+    const d=await r.json();
     document.getElementById('configBox').textContent=JSON.stringify(d,null,2);
   }catch(e){}
 }
@@ -2088,13 +2072,13 @@ loadConnections();
 // =====================================================================
 
 func main() {
-	cfgPath := flag.String("config", "", "path ke file YAML config")
-	sksPath := flag.String("sks", "", "path ke file .sks (legacy Android)")
-	server := flag.String("server", "", "override server SSH")
-	port := flag.Int("port", 0, "override port SSH")
-	user := flag.String("user", "", "override username")
-	pass := flag.String("pass", "", "override password")
-	apiBind := flag.String("api", "", "override API bind")
+	cfgPath  := flag.String("config", "", "path ke file YAML config")
+	sksPath  := flag.String("sks", "", "path ke file .sks (legacy Android)")
+	server   := flag.String("server", "", "override server SSH")
+	port     := flag.Int("port", 0, "override port SSH")
+	user     := flag.String("user", "", "override username")
+	pass     := flag.String("pass", "", "override password")
+	apiBind  := flag.String("api", "", "override API bind")
 	logLevel := flag.String("log-level", "", "override log level")
 	flag.Parse()
 
