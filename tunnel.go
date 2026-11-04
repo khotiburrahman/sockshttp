@@ -179,22 +179,39 @@ func (t *SSHTunnel) openRawConn() (net.Conn, error) {
 
 	if readResponse {
 		br := bufio.NewReader(conn)
+
+		// Timeout khusus untuk baca header response proxy
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+
+		// Baca baris pertama (status line)
 		first, err := br.ReadString('\n')
 		if err != nil {
 			conn.Close()
-			return nil, err
+			return nil, fmt.Errorf("proxy tidak merespon dalam 10s: %w", err)
 		}
-		t.logger.Info("Proxy: %s", strings.TrimRight(first, "\r\n"))
-		for {
+		t.logger.Info("Proxy response: %s", strings.TrimRight(first, "\r\n"))
+
+		// Baca sisa header — tapi LENIENT: jangan fail kalau ada error
+		// (SocksHttp tidak peduli header lengkap atau tidak, karena server
+		//  mungkin sudah langsung masuk mode WebSocket passthrough)
+		for i := 0; i < 100; i++ {
 			line, err := br.ReadString('\n')
 			if err != nil {
-				conn.Close()
-				return nil, err
-			}
-			if strings.TrimRight(line, "\r\n") == "" {
+				// EOF / timeout — lanjut saja
+				t.logger.Debug("Header loop selesai lebih awal: %v", err)
 				break
 			}
+			trimmed := strings.TrimRight(line, "\r\n")
+			if trimmed == "" {
+				break
+			}
+			t.logger.Debug("Proxy header: %s", trimmed)
 		}
+
+		// Reset deadline sebelum handshake SSH
+		conn.SetReadDeadline(time.Time{})
+
+		t.logger.Info("Ignoring proxy response, forcing connection..")
 		return &bufioConn{Conn: conn, r: br}, nil
 	}
 	return conn, nil
