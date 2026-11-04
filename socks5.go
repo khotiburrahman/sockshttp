@@ -15,13 +15,14 @@ type SOCKS5Server struct {
 	logger   *Logger
 	tunnel   *SSHTunnel
 	proxyMgr *ProxyManager
+	pool     *FakeIPPool // ← TAMBAHAN
 	ln       net.Listener
 	closed   atomic.Bool
 	wg       sync.WaitGroup
 }
 
-func NewSOCKS5Server(cfg *Config, logger *Logger, tunnel *SSHTunnel, pm *ProxyManager) *SOCKS5Server {
-	return &SOCKS5Server{cfg: cfg, logger: logger, tunnel: tunnel, proxyMgr: pm}
+func NewSOCKS5Server(cfg *Config, logger *Logger, tunnel *SSHTunnel, pm *ProxyManager, pool *FakeIPPool) *SOCKS5Server {
+	return &SOCKS5Server{cfg: cfg, logger: logger, tunnel: tunnel, proxyMgr: pm, pool: pool}
 }
 
 func (s *SOCKS5Server) Start() error {
@@ -110,6 +111,19 @@ func (s *SOCKS5Server) handleConn(c net.Conn) {
 	}
 	port := int(binary.BigEndian.Uint16(pb))
 
+	// ===================================================
+	// KUNCI FIX: Terjemahkan fake-IP → domain
+	// ===================================================
+	originalHost := host
+	if s.pool != nil && s.pool.IsFake(host) {
+		if d, ok := s.pool.LookupDomain(host); ok {
+			s.logger.Debug("SOCKS5 fake-IP %s → domain %s", host, d)
+			host = d
+		} else {
+			s.logger.Warn("SOCKS5 fake-IP %s tidak dikenal", host)
+		}
+	}
+
 	target, chain := s.proxyMgr.Resolve("DEFAULT")
 	s.logger.Debug("SOCKS5 %s:%d → %s (%s)", host, port, target, chain)
 
@@ -132,7 +146,7 @@ func (s *SOCKS5Server) handleConn(c net.Conn) {
 	}
 
 	if err != nil {
-		s.logger.Debug("SOCKS5 dial %s gagal: %v", dest, err)
+		s.logger.Debug("SOCKS5 dial %s (asli: %s) gagal: %v", dest, originalHost, err)
 		c.Write([]byte{0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		return
 	}
