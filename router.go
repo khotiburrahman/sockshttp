@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -250,7 +251,7 @@ func (r *Router) handleConn(raw net.Conn) {
 	if display == "" {
 		display = host
 	}
-	r.logger.Debug("CONN %s → %s:%d [%s] via %s", srcIP, display, port, ruleStr, proxy)
+	r.logger.Debug("CONN %s -> %s:%d [%s] via %s", srcIP, display, port, ruleStr, proxy)
 
 	switch proxy {
 	case ProxyReject:
@@ -263,7 +264,6 @@ func (r *Router) handleConn(raw net.Conn) {
 		}
 		remote, err := net.DialTimeout("tcp", target, 10*time.Second)
 		if err != nil {
-			r.logger.Debug("DIRECT dial %s gagal: %v", target, err)
 			return
 		}
 		defer remote.Close()
@@ -278,35 +278,31 @@ func (r *Router) handleConn(raw net.Conn) {
 		}
 		remote, err := r.tunnel.Dial("tcp", target)
 		if err != nil {
-			r.logger.Debug("TUNNEL dial %s gagal: %v", target, err)
 			return
 		}
 		defer remote.Close()
 		r.pipe(raw, remote)
-
-	default:
-		r.logger.Warn("Unknown proxy: %s", proxy)
 	}
 }
 
 func (r *Router) pipe(a, b net.Conn) {
-	var wg sync.WaitGroup
-	wg.Add(2)
+	// FIX MEMORY LEAK: Gunakan channel done
+	done := make(chan struct{}, 2)
 	go func() {
-		defer wg.Done()
 		io.Copy(b, a)
 		if tc, ok := b.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
+		done <- struct{}{}
 	}()
 	go func() {
-		defer wg.Done()
 		io.Copy(a, b)
 		if tc, ok := a.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
+		done <- struct{}{}
 	}()
-	wg.Wait()
+	<-done
 }
 
 func (r *Router) Close() {
