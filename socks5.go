@@ -15,7 +15,7 @@ type SOCKS5Server struct {
 	logger   *Logger
 	tunnel   *SSHTunnel
 	proxyMgr *ProxyManager
-	pool     *FakeIPPool // ← TAMBAHAN
+	pool     *FakeIPPool
 	ln       net.Listener
 	closed   atomic.Bool
 	wg       sync.WaitGroup
@@ -111,21 +111,16 @@ func (s *SOCKS5Server) handleConn(c net.Conn) {
 	}
 	port := int(binary.BigEndian.Uint16(pb))
 
-	// ===================================================
-	// KUNCI FIX: Terjemahkan fake-IP → domain
-	// edit in ur own risk ===================================================
 	originalHost := host
 	if s.pool != nil && s.pool.IsFake(host) {
 		if d, ok := s.pool.LookupDomain(host); ok {
-			s.logger.Debug("SOCKS5 fake-IP %s → domain %s", host, d)
+			s.logger.Debug("SOCKS5 fake-IP %s -> domain %s", host, d)
 			host = d
-		} else {
-			s.logger.Warn("SOCKS5 fake-IP %s tidak dikenal", host)
 		}
 	}
 
 	target, chain := s.proxyMgr.Resolve("DEFAULT")
-	s.logger.Debug("SOCKS5 %s:%d → %s (%s)", host, port, target, chain)
+	s.logger.Debug("SOCKS5 %s:%d -> %s (%s)", host, port, target, chain)
 
 	dest := net.JoinHostPort(host, strconv.Itoa(port))
 
@@ -155,23 +150,23 @@ func (s *SOCKS5Server) handleConn(c net.Conn) {
 	c.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 	c.SetDeadline(time.Time{})
 
-	var wg sync.WaitGroup
-	wg.Add(2)
+	// FIX MEMORY LEAK: Gunakan channel done
+	done := make(chan struct{}, 2)
 	go func() {
-		defer wg.Done()
 		io.Copy(remote, c)
 		if tc, ok := remote.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
+		done <- struct{}{}
 	}()
 	go func() {
-		defer wg.Done()
 		io.Copy(c, remote)
 		if tc, ok := c.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
+		done <- struct{}{}
 	}()
-	wg.Wait()
+	<-done
 }
 
 func (s *SOCKS5Server) Close() {
