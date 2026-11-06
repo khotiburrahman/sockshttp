@@ -694,7 +694,7 @@ func (r *Router) pipe(a, b net.Conn, track *Connection) {
 	<-done
 }
 
-func (r *Router) Close() {
+func (r *Router) Shutdown() {
 	if r.closed.Swap(true) {
 		return
 	}
