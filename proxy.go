@@ -35,7 +35,16 @@ func NewProxyManager(cfgs []ProxyGroupConfig, persistFile string) *ProxyManager 
 			Proxies: c.Proxies,
 			Now:     c.Default,
 		}
-		if g.Now == "" && len(c.Proxies) > 0 {
+		// Validasi: default harus anggota proxies
+		valid := false
+		for _, p := range c.Proxies {
+			if p == g.Now {
+				valid = true
+				break
+			}
+		}
+		if !valid && len(c.Proxies) > 0 {
+			// Fallback ke proxy pertama; warning akan muncul via ValidateAll
 			g.Now = c.Proxies[0]
 		}
 		pm.groups[c.Name] = g
@@ -139,4 +148,29 @@ func (pm *ProxyManager) Resolve(target string) (string, string) {
 		chain = append(chain, target)
 	}
 	return ProxyReject, strings.Join(chain, " → ") + " (loop)"
+}
+
+// ValidateAll mengembalikan daftar issue konfigurasi grup.
+// Dipanggil di main.go saat startup untuk log warning.
+func (pm *ProxyManager) ValidateAll() []string {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	var issues []string
+	for name, g := range pm.groups {
+		if g.Now == "" {
+			issues = append(issues, fmt.Sprintf("group %s: tidak ada proxy terpilih", name))
+			continue
+		}
+		valid := false
+		for _, p := range g.Proxies {
+			if p == g.Now {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			issues = append(issues, fmt.Sprintf("group %s: default %q bukan anggota", name, g.Now))
+		}
+	}
+	return issues
 }
