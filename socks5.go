@@ -16,13 +16,21 @@ type SOCKS5Server struct {
 	tunnel   *SSHTunnel
 	proxyMgr *ProxyManager
 	pool     *FakeIPPool
+	tracker  *ConnTracker
 	ln       net.Listener
 	closed   atomic.Bool
 	wg       sync.WaitGroup
 }
 
-func NewSOCKS5Server(cfg *Config, logger *Logger, tunnel *SSHTunnel, pm *ProxyManager, pool *FakeIPPool) *SOCKS5Server {
-	return &SOCKS5Server{cfg: cfg, logger: logger, tunnel: tunnel, proxyMgr: pm, pool: pool}
+func NewSOCKS5Server(cfg *Config, logger *Logger, tunnel *SSHTunnel, pm *ProxyManager, pool *FakeIPPool, tracker *ConnTracker) *SOCKS5Server {
+	return &SOCKS5Server{
+		cfg:      cfg,
+		logger:   logger,
+		tunnel:   tunnel,
+		proxyMgr: pm,
+		pool:     pool,
+		tracker:  tracker,
+	}
 }
 
 func (s *SOCKS5Server) Start() error {
@@ -119,6 +127,11 @@ func (s *SOCKS5Server) handleConn(c net.Conn) {
 		}
 	}
 
+	// Catatan: SOCKS5 selalu resolve via group DEFAULT.
+	// Rule SRC-IP-CIDR tidak berlaku di sini — rule tersebut hanya
+	// untuk traffic REDIRECT (router) karena butuh src IP asli client.
+	// SOCKS5 client yang connect langsung ke router akan terlihat
+	// sebagai "127.0.0.1" atau IP interface, bukan IP device.
 	target, chain := s.proxyMgr.Resolve("DEFAULT")
 	s.logger.Debug("SOCKS5 %s:%d -> %s (%s)", host, port, target, chain)
 
@@ -150,22 +163,33 @@ func (s *SOCKS5Server) handleConn(c net.Conn) {
 	c.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 	c.SetDeadline(time.Time{})
 
-	// FIX MEMORY LEAK: Gunakan channel done
+	// Pipe dua arah dengan penghitung byte global.
+	// Statistik per-koneksi (di dashboard) tidak dibuat di sini karena
+	// SOCKS5 dipakai untuk client manual, bukan traffic device — kalau
+	// nanti perlu per-conn view, tinggal panggil s.tracker.New() di atas.
 	done := make(chan struct{}, 2)
 	go func() {
-		io.Copy(remote, c)
+		cw := &countingWriter{w: remote, global: &s.tracker.TotalUp}
+		io.Copy(cw, c)
 		if tc, ok := remote.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
 		done <- struct{}{}
 	}()
 	go func() {
-		io.Copy(c, remote)
+		cw := &countingWriter{w: c, global: &s.tracker.TotalDown}
+		io.Copy(cw, remote)
 		if tc, ok := c.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
 		done <- struct{}{}
 	}()
+
+	<-done
+	// Paksa kedua arah berhenti agar goroutine satunya tidak menggantung
+	// kalau peer tidak mengirim FIN setelah CloseWrite.
+	c.Close()
+	remote.Close()
 	<-done
 }
 
