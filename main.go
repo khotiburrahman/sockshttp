@@ -12,20 +12,23 @@ import (
 	"time"
 )
 
+var Version = "dev"
+
 func main() {
-	cfgPath  := flag.String("config", "", "path ke file YAML config")
-	sksPath  := flag.String("sks", "", "path ke file .sks (legacy Android)")
-	server   := flag.String("server", "", "override server SSH")
-	port     := flag.Int("port", 0, "override port SSH")
-	user     := flag.String("user", "", "override username")
-	pass     := flag.String("pass", "", "override password")
-	apiBind  := flag.String("api", "", "override API bind")
+	os.Exit(run())
+}
+
+func run() int {
+	cfgPath := flag.String("config", "", "path ke file YAML config")
+	sksPath := flag.String("sks", "", "path ke file .sks (legacy Android)")
+	server := flag.String("server", "", "override server SSH")
+	port := flag.Int("port", 0, "override port SSH")
+	user := flag.String("user", "", "override username")
+	pass := flag.String("pass", "", "override password")
+	apiBind := flag.String("api", "", "override API bind")
 	logLevel := flag.String("log-level", "", "override log level")
 	flag.Parse()
 
-	// =========================================================
-	// 1. LOAD CONFIG
-	// =========================================================
 	cfg := DefaultConfig()
 	var err error
 
@@ -46,7 +49,6 @@ func main() {
 		}
 	}
 
-	// CLI overrides
 	if *server != "" {
 		cfg.Server = *server
 	}
@@ -66,132 +68,101 @@ func main() {
 		cfg.Log.Level = *logLevel
 	}
 
-	// Validasi
 	if cfg.Server == "" || cfg.ServerPort <= 0 {
-		log.Fatal("server/port belum diisi")
+		log.Println("server/port belum diisi")
+		return 1
 	}
 	if cfg.ValidityDate > 0 && time.Now().UnixMilli() >= cfg.ValidityDate {
-		log.Fatalf("config expired: %s", time.UnixMilli(cfg.ValidityDate))
+		log.Printf("config expired: %s", time.UnixMilli(cfg.ValidityDate))
+		return 1
 	}
 
-	// =========================================================
-	// 2. INIT LOGGER
-	// =========================================================
 	logger := NewLogger(parseLevel(cfg.Log.Level))
+	defer logger.Close()
 	if cfg.Log.File != "" {
 		if err := logger.SetFile(cfg.Log.File, cfg.Log.MaxSizeMB, cfg.Log.MaxBackups); err != nil {
 			logger.Warn("Log file: %v (stdout only)", err)
 		}
 	}
 
-	logger.Info("=== SocksHTTP-Go v2.0 (integrated router) ===")
+	logger.Info("=== SocksHTTP-Go %s (integrated router) ===", Version)
 	logger.Info("Server=%s:%d Tunnel=%s SOCKS5=%s:%d DNS=%s API=%s",
 		cfg.Server, cfg.ServerPort, cfg.TunnelType,
-		cfg.SOCKS5.Bind, cfg.SOCKS5.Port,
-		cfg.DNS.Bind, cfg.API.Bind)
+		cfg.SOCKS5.Bind, cfg.SOCKS5.Port, cfg.DNS.Bind, cfg.API.Bind)
 
-	// =========================================================
-	// 3. PID FILE
-	// =========================================================
 	if cfg.PIDFile != "" {
 		os.MkdirAll(filepath.Dir(cfg.PIDFile), 0755)
 		os.WriteFile(cfg.PIDFile, []byte(strconv.Itoa(os.Getpid())), 0644)
 		defer os.Remove(cfg.PIDFile)
 	}
 
-	// =========================================================
-	// 4. CONTEXT & SIGNAL
-	// =========================================================
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sig := make(chan os.Signal, 2)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-
-	// =========================================================
-	// 5. INIT SEMUA KOMPONEN
-	// =========================================================
 	pool := NewFakeIPPool()
 	tunnel := NewSSHTunnel(cfg, logger)
 	proxyMgr := NewProxyManager(cfg.ProxyGroups, cfg.StateFile)
-	tracker := NewConnTracker()
+	if issues := proxyMgr.ValidateAll(); len(issues) > 0 {
+		for _, s := range issues {
+			logger.Warn("Proxy config: %s", s)
+		}
+	}
+	tracker := NewConnTracker(cfg.StateFile, cfg.ConnRetention.D())
+	defer tracker.Close()
+
 	dns := NewDNSServer(cfg, logger, pool, tunnel)
-	socks5 := NewSOCKS5Server(cfg, logger, tunnel, proxyMgr, pool)
+	socks5 := NewSOCKS5Server(cfg, logger, tunnel, proxyMgr, pool, tracker)
 
-	// =========================================================
-	// 6. START TUNNEL (background, auto-reconnect)
-	// =========================================================
-	tmDone := make(chan struct{})
-	go func() {
-		tunnel.Run(ctx)
-		close(tmDone)
-	}()
-	tunnel.StartHealthLoop(ctx)
-
-	// =========================================================
-	// 7. TUNGGU KONEKSI SSH PERTAMA
-	// =========================================================
-	logger.Info("Menunggu koneksi SSH pertama...")
-	for i := 0; i < 120; i++ {
-		if tunnel.State() == "connected" {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			logger.Warn("Dibatalkan sebelum koneksi")
-			return
-		case <-time.After(500 * time.Millisecond):
-		}
-	}
-	if tunnel.State() != "connected" {
-		logger.Error("Timeout menunggu koneksi awal (60 detik)")
-		cancel()
-		os.Exit(1)
-	}
-
-	// =========================================================
-	// 8. START SOCKS5 (paling penting untuk test)
-	// =========================================================
-	if err := socks5.Start(); err != nil {
-		logger.Error("SOCKS5: %v", err)
-		cancel()
-		os.Exit(1)
-	}
-
-	// =========================================================
-	// 9. START DNS (fake-ip)
-	// =========================================================
-	if cfg.DNS.Enabled {
-		if err := dns.Start(); err != nil {
-			logger.Error("DNS: %v", err)
-			cancel()
-			os.Exit(1)
-		}
-	}
-
-	// =========================================================
-	// 10. START ROUTER (REDIRECT listener untuk iptables)
-	// =========================================================
 	router, err := NewRouter(cfg, logger, tunnel, dns, pool, proxyMgr, tracker)
 	if err != nil {
 		logger.Error("Router init: %v", err)
-		cancel()
-		os.Exit(1)
+		return 1
+	}
+
+	tmDone := make(chan struct{})
+	go func() { tunnel.Run(ctx); close(tmDone) }()
+	tunnel.StartHealthLoop(ctx)
+
+	startupTimeout := cfg.StartupTimeout.D()
+	if startupTimeout <= 0 {
+		startupTimeout = 60 * time.Second
+	}
+	logger.Info("Menunggu koneksi SSH pertama (max %s)...", startupTimeout)
+	deadline := time.Now().Add(startupTimeout)
+	for {
+		if tunnel.State() == "connected" {
+			break
+		}
+		if time.Now().After(deadline) {
+			logger.Error("Timeout menunggu koneksi awal")
+			return 1
+		}
+		select {
+		case <-ctx.Done():
+			return 1
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+
+	if err := socks5.Start(); err != nil {
+		logger.Error("SOCKS5: %v", err)
+		return 1
+	}
+	if cfg.DNS.Enabled {
+		if err := dns.Start(); err != nil {
+			logger.Error("DNS: %v", err)
+			return 1
+		}
 	}
 	if err := router.Start(); err != nil {
 		logger.Error("Router start: %v", err)
-		cancel()
-		os.Exit(1)
+		return 1
 	}
 
-	// =========================================================
-	// 11. START API + WEB UI
-	// =========================================================
-	api := NewAPIServer(cfg, logger, tunnel, proxyMgr, tracker, dns)
+	api := NewAPIServer(cfg, logger, tunnel, proxyMgr, tracker, dns, router)
 	if err := api.Start(); err != nil {
 		logger.Error("API: %v", err)
-		cancel()
-		os.Exit(1)
+		return 1
 	}
 
 	logger.Info("=================================================")
@@ -202,9 +173,9 @@ func main() {
 	logger.Info("  REDIRECT : %s", cfg.Redirect.Bind)
 	logger.Info("=================================================")
 
-	// =========================================================
-	// 12. TUNGGU SHUTDOWN
-	// =========================================================
+	sig := make(chan os.Signal, 2)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+
 	select {
 	case <-sig:
 		logger.Info("Shutdown signal diterima")
@@ -212,20 +183,21 @@ func main() {
 		logger.Warn("Tunnel loop berhenti tanpa signal")
 	}
 
-	// =========================================================
-	// 13. CLEANUP (urutan terbalik dari startup)
-	// =========================================================
-	cancel()
-	<-tmDone
-
+	// Reverse shutdown: listener dulu, tunnel terakhir
+	logger.Info("Shutdown: menutup listener...")
 	api.Close()
 	router.Close()
+	socks5.Close()
 	if cfg.DNS.Enabled {
 		dns.Close()
 	}
-	socks5.Close()
 
-	tracker.CloseAll()
+	logger.Info("Shutdown: menutup tunnel...")
+	cancel()
+	<-tmDone
+
+	tracker.ForceCloseAll("shutdown")
 
 	logger.Info("Bye 👋")
+	return 0
 }
