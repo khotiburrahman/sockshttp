@@ -141,3 +141,20 @@ func (l *Logger) Info(f string, a ...any)  { l.write(LvlInfo, f, a...) }
 func (l *Logger) Warn(f string, a ...any)  { l.write(LvlWarn, f, a...) }
 func (l *Logger) Error(f string, a ...any) { l.write(LvlErr, f, a...) }
 func (l *Logger) Debug(f string, a ...any) { l.write(LvlDbg, f, a...) }
+func (l *Logger) Close() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.file != nil {
+		l.file.Sync()
+		l.file.Close()
+		l.file = nil
+	}
+	for _, ch := range l.listeners {
+		select {
+		case <-ch:
+		default:
+			close(ch)
+		}
+	}
+	l.listeners = nil
+}
