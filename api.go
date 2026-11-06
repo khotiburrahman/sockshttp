@@ -97,6 +97,8 @@ func (a *APIServer) Start() error {
 	mux.HandleFunc("/api/devices", a.auth(a.handleDevices))
 	mux.HandleFunc("/api/traffic", a.auth(a.handleTraffic))
 	mux.HandleFunc("/api/rules/test", a.auth(a.handleRuleTest))
+	mux.HandleFunc("/api/fakeip/save", a.auth(a.handleFakeIPSave))
+	mux.HandleFunc("/api/fakeip/stats", a.auth(a.handleFakeIPStats))
 	mux.HandleFunc("/api/logs", a.auth(a.handleLogs))
 	mux.HandleFunc("/api/config", a.auth(a.handleConfig))
 
@@ -137,21 +139,21 @@ func (a *APIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"version":       Version,
-		"state":         a.tunnel.State(),
-		"uptime_sec":    int(time.Since(a.start).Seconds()),
-		"server":        fmt.Sprintf("%s:%d", a.cfg.Server, a.cfg.ServerPort),
-		"reconnects":    a.tunnel.reconnect.Load(),
-		"last_error":    lastErr,
-		"dns_queries":   a.dns.queries.Load(),
-		"dns_errors":    a.dns.errors.Load(),
-		"dns_pool":      a.dns.pool.Stats(),
-		"total_up":      a.tracker.TotalUp.Load(),
-		"total_down":    a.tracker.TotalDown.Load(),
-		"speed_up":      up,
-		"speed_down":    down,
-		"active_conns":  a.tracker.ActiveCount(),
-		"closed_conns":  a.tracker.ClosedCount(),
+		"version":      Version,
+		"state":        a.tunnel.State(),
+		"uptime_sec":   int(time.Since(a.start).Seconds()),
+		"server":       fmt.Sprintf("%s:%d", a.cfg.Server, a.cfg.ServerPort),
+		"reconnects":   a.tunnel.reconnect.Load(),
+		"last_error":   lastErr,
+		"dns_queries":  a.dns.queries.Load(),
+		"dns_errors":   a.dns.errors.Load(),
+		"dns_pool":     a.dns.pool.Stats(),
+		"total_up":     a.tracker.TotalUp.Load(),
+		"total_down":   a.tracker.TotalDown.Load(),
+		"speed_up":     up,
+		"speed_down":   down,
+		"active_conns": a.tracker.ActiveCount(),
+		"closed_conns": a.tracker.ClosedCount(),
 	})
 }
 
@@ -295,6 +297,38 @@ func (a *APIServer) handleRuleTest(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleFakeIPSave — POST /api/fakeip/save, paksa save sekarang.
+func (a *APIServer) handleFakeIPSave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	if a.cfg.FakeIPFile == "" {
+		http.Error(w, "fakeip_file tidak dikonfigurasi", 400)
+		return
+	}
+	if err := a.dns.pool.Save(); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	a.logger.Info("fake-IP saved via API ke %s", a.cfg.FakeIPFile)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"ok":   true,
+		"file": a.cfg.FakeIPFile,
+	})
+}
+
+// handleFakeIPStats — GET /api/fakeip/stats, info pool + file.
+func (a *APIServer) handleFakeIPStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"enabled": a.cfg.DNS.Enabled,
+		"file":    a.cfg.FakeIPFile,
+		"stats":   a.dns.pool.Stats(),
+	})
+}
+
 func (a *APIServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	ch := a.logger.Subscribe()
@@ -328,6 +362,8 @@ func (a *APIServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"tunnel":          a.cfg.TunnelType,
 		"socks5":          fmt.Sprintf("%s:%d", a.cfg.SOCKS5.Bind, a.cfg.SOCKS5.Port),
 		"dns":             a.cfg.DNS.Bind,
+		"dns_enabled":     a.cfg.DNS.Enabled,
+		"fakeip_file":     a.cfg.FakeIPFile,
 		"redirect":        a.cfg.Redirect.Bind,
 		"conn_retention":  a.cfg.ConnRetention.D().String(),
 		"startup_timeout": a.cfg.StartupTimeout.D().String(),
