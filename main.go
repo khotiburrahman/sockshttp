@@ -186,7 +186,7 @@ func run() int {
 	// Reverse shutdown: listener dulu, tunnel terakhir
 	logger.Info("Shutdown: menutup listener...")
 	api.Close()
-	router.Close()
+	router.Shutdown()
 	socks5.Close()
 	if cfg.DNS.Enabled {
 		dns.Close()
