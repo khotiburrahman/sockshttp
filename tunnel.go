@@ -410,6 +410,14 @@ func (t *SSHTunnel) Run(ctx context.Context) {
 			continue
 		}
 
+		// FIX: drain event disconnect basi dari generasi sebelumnya.
+		// Tanpa ini, sisa event dari cleanup() lama bisa memicu
+		// reconnect palsu tepat setelah handshake sukses.
+		select {
+		case <-t.disconCh:
+		default:
+		}
+
 		t.setState("connected")
 		t.lastErr.Store("")
 		backoff = t.cfg.Reconnect.InitialDelay.D()
