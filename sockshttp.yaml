@@ -2,118 +2,90 @@
 # SocksHTTP-Go — konfigurasi
 # ============================================================
 
-# --- Server SSH tujuan ---
 server: host
 server_port: 443
-username: hehe
-password: hehehe
+username: username
+password: password
 
-# --- Mode tunnel ---
 tunnel_type: proxy
-proxy_host: proxy
-proxy_port: 8080
+proxy_host: proxy_ip
+proxy_port: 80
 use_default_payload: false
 custom_payload: "GET / HTTP/1.1[crlf]Host: edu.ruangguru.com[crlf]Connection: Keep-Alive[crlf][crlf]PATCH / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf][crlf][split]HTTP/ 69[crlf][crlf]"
 
-# --- Koneksi ---
-pinger: 3
+pinger: 2
 no_delay: true
 
-# --- Startup & retensi koneksi ---
-startup_timeout: 60s        # timeout tunggu koneksi SSH pertama
-conn_retention: 60s         # berapa lama koneksi closed disimpan di UI
+startup_timeout: 60s
+conn_retention: 60s
 
-# --- Listener SOCKS5 ---
 socks5:
   bind: 0.0.0.0
   port: 7776
 
 # --- Fake-IP DNS ---
 dns:
-  enabled: false
+  enabled: true
   bind: 0.0.0.0:1054
   upstream: 1.1.1.1:53
 
-# --- Listener REDIRECT (iptables REDIRECT ke sini) ---
 redirect:
   bind: 0.0.0.0:7893
 
-# --- API/Web UI ---
 api:
   bind: 0.0.0.0:9091
   secret: ""
 
-# ============================================================
-# PROXY GROUPS
-# ============================================================
 proxy-groups:
   - name: DEFAULT
     type: select
     proxies: [TUNNEL, DIRECT, REJECT]
     default: TUNNEL
-
   - name: xgody
     type: select
     proxies: [TUNNEL, DIRECT, REJECT]
     default: TUNNEL
-
   - name: nadvvo
     type: select
     proxies: [TUNNEL, DIRECT, REJECT]
     default: TUNNEL
-
   - name: nadifx
     type: select
     proxies: [TUNNEL, DIRECT, REJECT]
     default: TUNNEL
-
   - name: aku
     type: select
     proxies: [TUNNEL, DIRECT, REJECT]
     default: TUNNEL
-
   - name: mamivvo
     type: select
     proxies: [TUNNEL, DIRECT, REJECT]
     default: TUNNEL
-
   - name: zaki
     type: select
     proxies: [TUNNEL, DIRECT, REJECT]
     default: REJECT
 
-# ============================================================
-# RULES — urutan penting, MATCH harus paling akhir
-# ============================================================
 rules:
-  # Bypass Direct untuk XL (jika diperlukan)
-  # - DOMAIN,www.xl.co.id,DIRECT
-
-  # 1. Rute berdasarkan IP Lokal (Device Mapping)
   - SRC-IP-CIDR,192.168.1.6/32,xgody
   - SRC-IP-CIDR,192.168.1.4/32,nadifx
   - SRC-IP-CIDR,192.168.1.3/32,aku
   - SRC-IP-CIDR,192.168.1.5/32,nadvvo
   - SRC-IP-CIDR,192.168.1.8/32,mamivvo
   - SRC-IP-CIDR,192.168.1.10/32,zaki
-
-  # 2. Sisa traffic diarahkan ke DEFAULT
   - MATCH,DEFAULT
 
-# ============================================================
-# PENGATURAN LAINNYA
-# ============================================================
 reconnect:
   enabled: true
-  initial_delay: 500000000      # 500 ms (nanodetik)
-  max_delay: 10000000000        # 10 s (nanodetik)
+  initial_delay: 500000000
+  max_delay: 3000000000
 
 health_check:
   enabled: true
-  interval: 30000000000         # 30 s (nanodetik)
-  timeout: 10000000000          # 10 s (nanodetik)
+  interval: 10000000000
+  timeout: 10000000000
   target: 1.1.1.1:53
-  failure_threshold: 5
+  failure_threshold: 2
 
 log:
   level: debug
@@ -122,4 +94,9 @@ log:
   max_backups: 3
 
 state_file: /tmp/sockshttp-state.json
+
+# Fake-IP persist — file gzip JSON, ~30-45KB untuk 10k domain.
+# Kosongkan (""), atau hapus baris ini untuk disable persist.
+fakeip_file: /root/sockshttp-linux-arm64/sockshttp-fakeip.json.gz
+
 pid_file: /tmp/sockshttp.pid
