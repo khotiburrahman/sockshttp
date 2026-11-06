@@ -63,15 +63,34 @@ func formatPayload(host string, port int, payload string) string {
 }
 
 func injectSplit(payload string, out io.Writer) error {
-	parts := strings.Split(payload, "[delay_split]")
+	parts := strings.Split(payload, "[delay_split")
+	delay := time.Second
+
 	for i, p := range parts {
+		if i > 0 {
+			// p dimulai dengan "]" atau "=NNms]rest"
+			if p == "" || p[0] != ']' {
+				// coba parse "=duration]"
+				if idx := strings.IndexByte(p, ']'); idx >= 0 {
+					trimmed := strings.TrimPrefix(p[:idx], "=")
+					if trimmed != "" {
+						if d, err := time.ParseDuration(trimmed); err == nil {
+							delay = d
+						}
+					}
+					p = p[idx+1:]
+				}
+			} else {
+				p = p[1:]
+			}
+		}
 		for _, sp := range strings.Split(p, "[split]") {
 			if _, err := io.WriteString(out, sp); err != nil {
 				return err
 			}
 		}
 		if i != len(parts)-1 {
-			time.Sleep(time.Second)
+			time.Sleep(delay)
 		}
 	}
 	return nil
