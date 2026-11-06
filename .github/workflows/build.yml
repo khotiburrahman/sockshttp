@@ -1,11 +1,12 @@
-name: build-arm64
+name: build
 
 on:
-  push:
-    branches: [main, master]
-    tags: ["v*"]
-  pull_request:
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (branch/tag/sha), kosong = current"
+        required: false
+        default: ""
 
 jobs:
   build:
@@ -21,6 +22,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - uses: actions/setup-go@v5
         with:
@@ -33,6 +36,9 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: go test
+        run: go test ./...
+
       - name: build
         env:
           CGO_ENABLED: "0"
@@ -40,7 +46,9 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           mkdir -p dist
-          go build -trimpath -ldflags="-s -w" \
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          go build -trimpath \
+            -ldflags="-s -w -X main.Version=$VERSION" \
             -o dist/${{ matrix.name }} .
 
       - name: verify binary
@@ -52,21 +60,10 @@ jobs:
         run: |
           cd dist
           cp ../sockshttp.yaml .
-          cp ../scripts/init.d/sockshttp init.d-sockshttp
-          cp ../scripts/action/routing.sh qtun-routing
           tar czf ${{ matrix.name }}.tar.gz \
-            ${{ matrix.name }} \
-            sockshttp.yaml \
-            init.d-sockshttp \
-            qtun-routing
+            ${{ matrix.name }} sockshttp.yaml
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
           path: dist/${{ matrix.name }}.tar.gz
-
-      - name: attach to release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/${{ matrix.name }}.tar.gz
