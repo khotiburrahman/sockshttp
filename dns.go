@@ -1,15 +1,28 @@
 package main
 
 import (
+	"compress/gzip"
+	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// fakeIPSnapshot adalah format on-disk. Version disimpan untuk migrasi
+// format di masa depan kalau struktur berubah.
+type fakeIPSnapshot struct {
+	Version int         `json:"version"`
+	NextIP  uint32      `json:"next_ip"`
+	Entries [][2]string `json:"entries"`
+}
 
 type FakeIPPool struct {
 	mu        sync.Mutex
@@ -21,6 +34,9 @@ type FakeIPPool struct {
 	hits      atomic.Int64
 	misses    atomic.Int64
 	evictions atomic.Int64
+
+	filePath string
+	dirty    atomic.Bool
 }
 
 func NewFakeIPPool() *FakeIPPool {
@@ -29,6 +45,151 @@ func NewFakeIPPool() *FakeIPPool {
 		ip2domain: map[string]string{},
 		maxSize:   10000,
 		nextIP:    (198 << 24) | (18 << 16) | 1,
+	}
+}
+
+// Load membaca snapshot dari path. Tidak error kalau file belum ada (first run).
+// Error hanya kalau file ada tapi corrupt / tidak bisa dibaca.
+func (p *FakeIPPool) Load(path string) error {
+	p.filePath = path
+
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return nil // first run
+	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("gzip reader: %w", err)
+	}
+	defer gz.Close()
+
+	var snap fakeIPSnapshot
+	if err := json.NewDecoder(gz).Decode(&snap); err != nil {
+		return fmt.Errorf("decode: %w", err)
+	}
+	if snap.Version != 1 {
+		return fmt.Errorf("unsupported version %d", snap.Version)
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.domain2IP = make(map[string]string, len(snap.Entries))
+	p.ip2domain = make(map[string]string, len(snap.Entries))
+	p.order = p.order[:0]
+
+	for _, e := range snap.Entries {
+		if len(e) != 2 || e[0] == "" || e[1] == "" {
+			continue
+		}
+		d, ip := e[0], e[1]
+		p.domain2IP[d] = ip
+		p.ip2domain[ip] = d
+		p.order = append(p.order, d)
+	}
+
+	// Recover nextIP kalau rusak / di luar range 198.18.x.x
+	p.nextIP = snap.NextIP
+	if (p.nextIP>>24)&0xFF != 198 || (p.nextIP>>16)&0xFF != 18 || p.nextIP == 0 {
+		p.nextIP = (198 << 24) | (18 << 16) | 1
+		for _, ip := range p.domain2IP {
+			if v4 := net.ParseIP(ip).To4(); v4 != nil {
+				v := uint32(v4[0])<<24 | uint32(v4[1])<<16 | uint32(v4[2])<<8 | uint32(v4[3])
+				if v >= p.nextIP {
+					p.nextIP = v + 1
+				}
+			}
+		}
+		if (p.nextIP>>24)&0xFF != 198 || (p.nextIP>>16)&0xFF != 18 {
+			p.nextIP = (198 << 24) | (18 << 16) | 1
+		}
+	}
+
+	return nil
+}
+
+// Save menulis snapshot atomik ke p.filePath via .tmp + rename.
+// Return nil kalau filePath kosong (persist disabled).
+// Reset dirty flag hanya saat sukses.
+func (p *FakeIPPool) Save() error {
+	if p.filePath == "" {
+		return nil
+	}
+
+	// Snapshot di bawah lock, tulis di luar lock
+	p.mu.Lock()
+	snap := fakeIPSnapshot{
+		Version: 1,
+		NextIP:  p.nextIP,
+		Entries: make([][2]string, 0, len(p.order)),
+	}
+	for _, d := range p.order {
+		if ip, ok := p.domain2IP[d]; ok {
+			snap.Entries = append(snap.Entries, [2]string{d, ip})
+		}
+	}
+	p.mu.Unlock()
+
+	tmp := p.filePath + ".tmp"
+	if err := os.MkdirAll(filepath.Dir(p.filePath), 0755); err != nil {
+		return err
+	}
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	gz := gzip.NewWriter(f)
+	if err := json.NewEncoder(gz).Encode(snap); err != nil {
+		gz.Close()
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("encode: %w", err)
+	}
+	if err := gz.Close(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("gzip close: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("file close: %w", err)
+	}
+	if err := os.Rename(tmp, p.filePath); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("rename: %w", err)
+	}
+
+	p.dirty.Store(false)
+	return nil
+}
+
+// DirtyLoop menyimpan snapshot periodik tiap 10 menit kalau ada perubahan.
+// Final save saat shutdown dilakukan di main.go.
+func (p *FakeIPPool) DirtyLoop(ctx context.Context, logger *Logger) {
+	if p.filePath == "" {
+		return
+	}
+	tk := time.NewTicker(10 * time.Minute)
+	defer tk.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tk.C:
+			if p.dirty.Load() {
+				if err := p.Save(); err != nil {
+					logger.Warn("fake-IP periodic save: %v", err)
+					// dirty tetap true, akan retry tick berikutnya
+				} else {
+					logger.Debug("fake-IP periodic save OK")
+				}
+			}
+		}
 	}
 }
 
@@ -47,7 +208,7 @@ func (p *FakeIPPool) Assign(domain string) string {
 	p.ip2domain[ip] = domain
 	p.order = append(p.order, domain)
 	p.nextIP++
-	if (p.nextIP>>16)&0xFF != 18 {
+	if (p.nextIP>>24)&0xFF != 198 || (p.nextIP>>16)&0xFF != 18 {
 		p.nextIP = (198 << 24) | (18 << 16) | 1
 	}
 	for len(p.order) > p.maxSize {
@@ -59,6 +220,7 @@ func (p *FakeIPPool) Assign(domain string) string {
 			p.evictions.Add(1)
 		}
 	}
+	p.dirty.Store(true)
 	return ip
 }
 
@@ -81,11 +243,16 @@ func (p *FakeIPPool) Stats() map[string]int64 {
 	p.mu.Lock()
 	size := len(p.domain2IP)
 	p.mu.Unlock()
+	dirty := int64(0)
+	if p.dirty.Load() {
+		dirty = 1
+	}
 	return map[string]int64{
 		"size":      int64(size),
 		"hits":      p.hits.Load(),
 		"misses":    p.misses.Load(),
 		"evictions": p.evictions.Load(),
+		"dirty":     dirty,
 	}
 }
 
@@ -211,7 +378,6 @@ func (d *DNSServer) handleQuery(q []byte) []byte {
 	domain := strings.Join(labels, ".")
 
 	if qtype != 1 || qclass != 1 {
-		// AAAA / HTTPS / SVCB / dll → NODATA, browser langsung fallback ke A.
 		return d.buildEmptyResponse(q, questionEnd, 0)
 	}
 
