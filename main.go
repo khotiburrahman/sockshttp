@@ -100,6 +100,15 @@ func run() int {
 	defer cancel()
 
 	pool := NewFakeIPPool()
+	if cfg.DNS.Enabled && cfg.FakeIPFile != "" {
+		if err := pool.Load(cfg.FakeIPFile); err != nil {
+			logger.Warn("fake-IP load %s: %v (mulai kosong)", cfg.FakeIPFile, err)
+		} else if s := pool.Stats(); s["size"] > 0 {
+			logger.Info("fake-IP loaded %d entries dari %s", s["size"], cfg.FakeIPFile)
+		}
+		go pool.DirtyLoop(ctx, logger)
+	}
+
 	tunnel := NewSSHTunnel(cfg, logger)
 	proxyMgr := NewProxyManager(cfg.ProxyGroups, cfg.StateFile)
 	if issues := proxyMgr.ValidateAll(); len(issues) > 0 {
@@ -183,13 +192,21 @@ func run() int {
 		logger.Warn("Tunnel loop berhenti tanpa signal")
 	}
 
-	// Reverse shutdown: listener dulu, tunnel terakhir
 	logger.Info("Shutdown: menutup listener...")
 	api.Close()
 	router.Shutdown()
 	socks5.Close()
 	if cfg.DNS.Enabled {
 		dns.Close()
+	}
+
+	// Final save fake-IP (setelah listener ditutup, sebelum tunnel di-stop)
+	if cfg.DNS.Enabled && cfg.FakeIPFile != "" {
+		if err := pool.Save(); err != nil {
+			logger.Warn("fake-IP final save: %v", err)
+		} else {
+			logger.Info("fake-IP saved ke %s", cfg.FakeIPFile)
+		}
 	}
 
 	logger.Info("Shutdown: menutup tunnel...")
