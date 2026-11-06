@@ -37,9 +37,6 @@ const (
 	SOOriginalDst  = 80
 )
 
-// =========================================================
-// Duration
-// =========================================================
 type Duration time.Duration
 
 func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
@@ -69,9 +66,6 @@ func (d Duration) MarshalYAML() (interface{}, error) {
 
 func (d Duration) D() time.Duration { return time.Duration(d) }
 
-// =========================================================
-// Config
-// =========================================================
 type Config struct {
 	Server     string `yaml:"server"`
 	ServerPort int    `yaml:"server_port"`
@@ -135,8 +129,9 @@ type Config struct {
 		MaxBackups int    `yaml:"max_backups"`
 	} `yaml:"log"`
 
-	StateFile string `yaml:"state_file"`
-	PIDFile   string `yaml:"pid_file"`
+	StateFile  string `yaml:"state_file"`
+	FakeIPFile string `yaml:"fakeip_file"`
+	PIDFile    string `yaml:"pid_file"`
 
 	ValidityDate int64 `yaml:"-"`
 }
@@ -177,6 +172,7 @@ func DefaultConfig() *Config {
 	c.Log.MaxSizeMB = 10
 	c.Log.MaxBackups = 3
 	c.StateFile = "/etc/qtun/run/sockshttp-state.json"
+	c.FakeIPFile = "/etc/qtun/run/sockshttp-fakeip.json.gz"
 	c.PIDFile = "/var/run/sockshttp.pid"
 
 	c.ProxyGroups = []ProxyGroupConfig{
