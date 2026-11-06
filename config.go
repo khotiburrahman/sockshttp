@@ -38,18 +38,19 @@ const (
 )
 
 // =========================================================
-// Duration: menerima YAML int (nanodetik) ATAU string ("2s")
+// Duration
 // =========================================================
 type Duration time.Duration
 
 func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
-	// Coba integer dulu (nanodetik)
 	var n int64
 	if err := value.Decode(&n); err == nil {
+		if n > 0 && n < 1000 {
+			fmt.Fprintf(os.Stderr, "WARN: duration %d terlalu kecil, kemungkinan salah (gunakan '2s' bukan '2')\n", n)
+		}
 		*d = Duration(n)
 		return nil
 	}
-	// Coba string ("2s", "500ms", "1h30m")
 	var s string
 	if err := value.Decode(&s); err == nil {
 		parsed, err := time.ParseDuration(s)
@@ -66,10 +67,7 @@ func (d Duration) MarshalYAML() (interface{}, error) {
 	return time.Duration(d).String(), nil
 }
 
-// D() mengembalikan time.Duration untuk dipakai di kode
-func (d Duration) D() time.Duration {
-	return time.Duration(d)
-}
+func (d Duration) D() time.Duration { return time.Duration(d) }
 
 // =========================================================
 // Config
@@ -89,6 +87,9 @@ type Config struct {
 
 	Pinger  int  `yaml:"pinger"`
 	NoDelay bool `yaml:"no_delay"`
+
+	StartupTimeout Duration `yaml:"startup_timeout"`
+	ConnRetention  Duration `yaml:"conn_retention"`
 
 	SOCKS5 struct {
 		Bind string `yaml:"bind"`
@@ -149,10 +150,12 @@ type ProxyGroupConfig struct {
 
 func DefaultConfig() *Config {
 	c := &Config{
-		ServerPort: 22,
-		TunnelType: "direct",
-		Pinger:     3,
-		NoDelay:    true,
+		ServerPort:     22,
+		TunnelType:     "direct",
+		Pinger:         3,
+		NoDelay:        true,
+		StartupTimeout: Duration(60 * time.Second),
+		ConnRetention:  Duration(60 * time.Second),
 	}
 	c.SOCKS5.Bind = "127.0.0.1"
 	c.SOCKS5.Port = 7777
@@ -206,6 +209,12 @@ func LoadYAMLConfig(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse YAML: %w", err)
 	}
+	if len(cfg.Rules) > 0 {
+		last := strings.ToUpper(strings.TrimSpace(strings.SplitN(cfg.Rules[len(cfg.Rules)-1], ",", 2)[0]))
+		if last != RuleMatch {
+			fmt.Fprintf(os.Stderr, "WARN: rules tidak diakhiri MATCH — semua traffic tak-match akan REJECT\n")
+		}
+	}
 	return cfg, nil
 }
 
@@ -240,16 +249,28 @@ func decryptLegacyDES(key string, in []byte) ([]byte, error) {
 func decryptSecurePrefs(password, b64 string) ([]byte, error) {
 	parts := strings.Split(b64, ".")
 	if len(parts) != 3 {
-		return nil, errors.New("bad format")
+		return nil, errors.New("format .sks tidak valid (butuh 3 bagian dipisah titik)")
 	}
-	salt, _ := base64.StdEncoding.DecodeString(parts[0])
-	iv, _ := base64.StdEncoding.DecodeString(parts[1])
-	ct, _ := base64.StdEncoding.DecodeString(parts[2])
+	salt, err := base64.StdEncoding.DecodeString(parts[0])
+	if err != nil {
+		return nil, fmt.Errorf("decode salt: %w", err)
+	}
+	iv, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("decode iv: %w", err)
+	}
+	ct, err := base64.StdEncoding.DecodeString(parts[2])
+	if err != nil {
+		return nil, fmt.Errorf("decode ciphertext: %w", err)
+	}
 	key, err := pbkdf2.Key(sha256.New, password, salt, 1000, 16)
 	if err != nil {
 		return nil, err
 	}
-	block, _ := aes.NewCipher(key)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		return nil, err
