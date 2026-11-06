@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -132,17 +131,17 @@ func (c *Connection) View(retention time.Duration) *ConnectionView {
 // ConnTracker
 // =========================================================
 type ConnTracker struct {
-	mu          sync.RWMutex
-	conns       map[string]*Connection
-	order       []string
-	maxSize     int
-	retention   time.Duration
-	bytesFile   string
-	TotalUp     atomic.Int64
-	TotalDown   atomic.Int64
-	lastSave    atomic.Int64
-	done        chan struct{}
-	closedOnce  sync.Once
+	mu         sync.RWMutex
+	conns      map[string]*Connection
+	order      []string
+	maxSize    int
+	retention  time.Duration
+	bytesFile  string
+	TotalUp    atomic.Int64
+	TotalDown  atomic.Int64
+	lastSave   atomic.Int64
+	done       chan struct{}
+	closedOnce sync.Once
 }
 
 func NewConnTracker(stateFile string, retention time.Duration) *ConnTracker {
@@ -438,7 +437,9 @@ func (ct *ConnTracker) AggregateBySrc() []SrcAggregate {
 	return out
 }
 
-func (ct *ConnTracker) Close() {
+// Shutdown menghentikan background prune loop dan menyimpan total byte.
+// (Sebelumnya bernama Close, yang bentrok dengan Close(id, reason).)
+func (ct *ConnTracker) Shutdown() {
 	ct.closedOnce.Do(func() {
 		close(ct.done)
 		ct.saveTotals()
