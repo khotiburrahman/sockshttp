@@ -19,6 +19,13 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// Timeout untuk Dial channel setelah tunnel aktif.
+// Diturunkan dari 15s → 5s agar HP retry lebih cepat saat tunnel mati.
+const tunnelDialTimeout = 5 * time.Second
+
+// Timeout per-attempt untuk warmup dial saat handshake baru selesai.
+const warmupDialTimeout = 3 * time.Second
+
 type monitoredConn struct {
 	net.Conn
 	onClose func(error)
@@ -116,7 +123,7 @@ func (t *SSHTunnel) Dial(network, addr string) (net.Conn, error) {
 	if c == nil {
 		return nil, errors.New("tunnel tidak aktif")
 	}
-	return dialSSHWithTimeout(c, network, addr, 15*time.Second)
+	return dialSSHWithTimeout(c, network, addr, tunnelDialTimeout)
 }
 
 func (t *SSHTunnel) buildAuth() ([]ssh.AuthMethod, error) {
@@ -186,26 +193,20 @@ func (t *SSHTunnel) openRawConn() (net.Conn, error) {
 		br := bufio.NewReader(conn)
 		conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 
-		// Loop untuk membaca semua response HTTP (301, 101, dll) sampai ketemu SSH banner
 		for i := 0; i < 10; i++ {
 			peek, err := br.Peek(4)
 			if err != nil {
-				break // Timeout atau error, langsung lanjut
+				break
 			}
-
-			// Jika sudah mendeteksi awal SSH banner, berhenti membaca
 			if string(peek) == "SSH-" {
 				t.logger.Debug("SSH banner detected, stopping HTTP drain")
 				break
 			}
-
-			// Jika bukan HTTP, hentikan loop agar tidak membuang data SSH
 			if string(peek) != "HTTP" {
 				t.logger.Debug("Non-HTTP data detected: %q", string(peek))
 				break
 			}
 
-			// Baca status line
 			first, err := br.ReadString('\n')
 			if err != nil {
 				conn.Close()
@@ -214,7 +215,6 @@ func (t *SSHTunnel) openRawConn() (net.Conn, error) {
 			first = strings.TrimRight(first, "\r\n")
 			t.logger.Info("Proxy response: %s", first)
 
-			// Parse status code (contoh: HTTP/1.1 301 Moved...)
 			parts := strings.SplitN(first, " ", 3)
 			if len(parts) < 2 {
 				conn.Close()
@@ -228,7 +228,6 @@ func (t *SSHTunnel) openRawConn() (net.Conn, error) {
 			isChunked := false
 			hasConnectionClose := false
 
-			// Baca header
 			for j := 0; j < 200; j++ {
 				line, err := br.ReadString('\n')
 				if err != nil {
@@ -254,13 +253,11 @@ func (t *SSHTunnel) openRawConn() (net.Conn, error) {
 				}
 			}
 
-			// 1xx, 204, 304 tidak memiliki body
 			if is1xx || is204or304 {
 				t.logger.Debug("Status %s has no body, continue", statusCode)
 				continue
 			}
 
-			// Drain body
 			if contentLength > 0 {
 				n, _ := io.CopyN(io.Discard, br, contentLength)
 				t.logger.Info("Drained %d bytes body (Content-Length)", n)
@@ -283,7 +280,6 @@ func (t *SSHTunnel) openRawConn() (net.Conn, error) {
 						break
 					}
 					if chunkSize == 0 {
-						// Baca trailer
 						for k := 0; k < 20; k++ {
 							tl, terr := br.ReadString('\n')
 							if terr != nil || strings.TrimRight(tl, "\r\n") == "" {
@@ -297,7 +293,7 @@ func (t *SSHTunnel) openRawConn() (net.Conn, error) {
 					if cerr != nil {
 						break
 					}
-					br.ReadString('\n') // trailing CRLF
+					br.ReadString('\n')
 				}
 				t.logger.Info("Drained %d bytes body (chunked)", drained)
 			} else if hasConnectionClose {
@@ -333,28 +329,76 @@ func (t *SSHTunnel) dialOnce() error {
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         20 * time.Second,
 	}
+
+	// --- Fase 1: raw TCP + payload ---
+	rawStart := time.Now()
 	raw, err := t.openRawConn()
 	if err != nil {
 		return err
 	}
+	rawDur := time.Since(rawStart)
+
 	mon := &monitoredConn{Conn: raw, onClose: func(e error) {
 		select {
 		case t.disconCh <- e:
 		default:
 		}
 	}}
+
+	// --- Fase 2: SSH handshake ---
+	hsStart := time.Now()
 	addr := net.JoinHostPort(t.cfg.Server, strconv.Itoa(t.cfg.ServerPort))
 	sshConn, chans, reqs, err := ssh.NewClientConn(mon, addr, sshCfg)
 	if err != nil {
 		raw.Close()
 		return fmt.Errorf("handshake SSH: %w", err)
 	}
+	hsDur := time.Since(hsStart)
+
 	client := ssh.NewClient(sshConn, chans, reqs)
+
+	// --- Fase 3: warmup — pastikan minimal satu channel bisa dibuka ---
+	// Ini yang menutup jendela "state connected tapi Dial gagal", yang
+	// jadi penyebab HP/Telegram/YouTube retry beberapa detik setelah
+	// reconnect. Baru setelah warmup sukses, tunnel layak disebut ready.
+	warmupTarget := t.cfg.HealthCheck.Target
+	if warmupTarget == "" {
+		warmupTarget = "1.1.1.1:53"
+	}
+
+	warmupStart := time.Now()
+	var warmupErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		wc, werr := dialSSHWithTimeout(client, "tcp", warmupTarget, warmupDialTimeout)
+		if werr == nil {
+			wc.Close()
+			warmupErr = nil
+			t.logger.Debug("[tunnel] warmup OK (attempt %d, %dms)", attempt, time.Since(warmupStart).Milliseconds())
+			break
+		}
+		warmupErr = werr
+		t.logger.Debug("[tunnel] warmup attempt %d gagal: %v", attempt, werr)
+		if attempt < 3 {
+			time.Sleep(300 * time.Millisecond)
+		}
+	}
+	if warmupErr != nil {
+		client.Close()
+		return fmt.Errorf("warmup gagal 3x ke %s (jika target diblok server SSH, ubah health_check.target): %w", warmupTarget, warmupErr)
+	}
+	warmupDur := time.Since(warmupStart)
+
+	// --- Semua fase lolos: baru declare ready ---
 	t.mu.Lock()
 	t.client = client
 	t.mu.Unlock()
 	t.connected.Store(true)
-	t.logger.Info("SSH tersambung ke %s", addr)
+
+	total := rawDur + hsDur + warmupDur
+	t.logger.Info("SSH tersambung ke %s (raw=%dms hs=%dms warmup=%dms total=%dms)",
+		addr, rawDur.Milliseconds(), hsDur.Milliseconds(),
+		warmupDur.Milliseconds(), total.Milliseconds())
+
 	if t.cfg.Pinger > 0 {
 		go t.pinger(client)
 	}
@@ -410,11 +454,10 @@ func (t *SSHTunnel) Run(ctx context.Context) {
 			continue
 		}
 
-		// FIX: drain event disconnect basi dari generasi sebelumnya.
-		// Tanpa ini, sisa event dari cleanup() lama bisa memicu
-		// reconnect palsu tepat setelah handshake sukses.
+		// Drain event disconnect basi dari generasi sebelumnya.
 		select {
-		case <-t.disconCh:
+		case err := <-t.disconCh:
+			t.logger.Debug("[tunnel] drain disconnect basi: %v", err)
 		default:
 		}
 
