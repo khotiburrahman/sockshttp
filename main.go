@@ -108,7 +108,7 @@ func run() int {
 		}
 	}
 	tracker := NewConnTracker(cfg.StateFile, cfg.ConnRetention.D())
-	defer tracker.Close()
+	defer tracker.Shutdown()
 
 	dns := NewDNSServer(cfg, logger, pool, tunnel)
 	socks5 := NewSOCKS5Server(cfg, logger, tunnel, proxyMgr, pool, tracker)
