@@ -12,40 +12,59 @@ import (
 )
 
 type FakeIPPool struct {
-	mu        sync.RWMutex
+	mu        sync.Mutex
 	domain2IP map[string]string
 	ip2domain map[string]string
+	order     []string
+	maxSize   int
 	nextIP    uint32
+	hits      atomic.Int64
+	misses    atomic.Int64
+	evictions atomic.Int64
 }
 
 func NewFakeIPPool() *FakeIPPool {
 	return &FakeIPPool{
 		domain2IP: map[string]string{},
 		ip2domain: map[string]string{},
-		nextIP:    (198 << 24) | (18 << 16) | (0 << 8) | 1,
+		maxSize:   10000,
+		nextIP:    (198 << 24) | (18 << 16) | 1,
 	}
 }
 
 func (p *FakeIPPool) Assign(domain string) string {
+	domain = strings.ToLower(domain)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if ip, ok := p.domain2IP[domain]; ok {
+		p.hits.Add(1)
 		return ip
 	}
+	p.misses.Add(1)
 	ip := fmt.Sprintf("%d.%d.%d.%d",
 		(p.nextIP>>24)&0xFF, (p.nextIP>>16)&0xFF, (p.nextIP>>8)&0xFF, p.nextIP&0xFF)
 	p.domain2IP[domain] = ip
 	p.ip2domain[ip] = domain
+	p.order = append(p.order, domain)
 	p.nextIP++
 	if (p.nextIP>>16)&0xFF != 18 {
-		p.nextIP = (198 << 24) | (18 << 16) | (0 << 8) | 1
+		p.nextIP = (198 << 24) | (18 << 16) | 1
+	}
+	for len(p.order) > p.maxSize {
+		old := p.order[0]
+		p.order = p.order[1:]
+		if oldIP, ok := p.domain2IP[old]; ok {
+			delete(p.ip2domain, oldIP)
+			delete(p.domain2IP, old)
+			p.evictions.Add(1)
+		}
 	}
 	return ip
 }
 
 func (p *FakeIPPool) LookupDomain(ip string) (string, bool) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	d, ok := p.ip2domain[ip]
 	return d, ok
 }
@@ -56,6 +75,18 @@ func (p *FakeIPPool) IsFake(ip string) bool {
 		return false
 	}
 	return parsed[0] == 198 && parsed[1] == 18
+}
+
+func (p *FakeIPPool) Stats() map[string]int64 {
+	p.mu.Lock()
+	size := len(p.domain2IP)
+	p.mu.Unlock()
+	return map[string]int64{
+		"size":      int64(size),
+		"hits":      p.hits.Load(),
+		"misses":    p.misses.Load(),
+		"evictions": p.evictions.Load(),
+	}
 }
 
 type DNSServer struct {
@@ -151,9 +182,9 @@ func (d *DNSServer) serveTCP() {
 func (d *DNSServer) handleQuery(q []byte) []byte {
 	d.queries.Add(1)
 	if len(q) < 12 {
+		d.errors.Add(1)
 		return nil
 	}
-
 	pos := 12
 	var labels []string
 	for pos < len(q) {
@@ -163,29 +194,30 @@ func (d *DNSServer) handleQuery(q []byte) []byte {
 			break
 		}
 		if l > 63 || pos+l+1 > len(q) {
+			d.errors.Add(1)
 			return nil
 		}
 		labels = append(labels, string(q[pos+1:pos+1+l]))
 		pos += l + 1
 	}
 	if pos+4 > len(q) {
+		d.errors.Add(1)
 		return nil
 	}
 	qtype := binary.BigEndian.Uint16(q[pos : pos+2])
 	qclass := binary.BigEndian.Uint16(q[pos+2 : pos+4])
 	pos += 4
 	questionEnd := pos
-
 	domain := strings.Join(labels, ".")
 
 	if qtype != 1 || qclass != 1 {
+		// AAAA / HTTPS / SVCB / dll → NODATA, browser langsung fallback ke A.
 		return d.buildEmptyResponse(q, questionEnd, 0)
 	}
 
 	fakeIP := d.pool.Assign(domain)
 	ip := net.ParseIP(fakeIP).To4()
 	d.logger.Debug("DNS: %s → %s", domain, fakeIP)
-
 	return d.buildAResponse(q, questionEnd, ip)
 }
 
