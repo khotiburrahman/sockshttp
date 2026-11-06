@@ -70,10 +70,20 @@ func (r *Rule) Match(srcIP, dstIP, domain string) bool {
 	case RuleDomain:
 		return strings.EqualFold(domain, r.Value)
 	case RuleDomainSuffix:
-		return strings.HasSuffix(strings.ToLower(domain), r.Value) ||
-			strings.ToLower(domain) == strings.TrimPrefix(r.Value, ".")
+		d := strings.ToLower(domain)
+		v := strings.ToLower(r.Value)
+		v = strings.TrimPrefix(v, ".")
+		return d == v || strings.HasSuffix(d, "."+v)
 	case RuleDomainKeyword:
 		return strings.Contains(strings.ToLower(domain), r.Value)
 	}
 	return false
+}
+
+// Explain menjelaskan apakah rule ini match dan kenapa.
+func (r *Rule) Explain(srcIP, dstIP, domain string) string {
+	if !r.Match(srcIP, dstIP, domain) {
+		return ""
+	}
+	return r.raw
 }
