@@ -369,7 +369,12 @@ func (t *SSHTunnel) pinger(client *ssh.Client) {
 			return
 		}
 		if _, _, err := client.SendRequest("keepalive@openssh.com", true, nil); err != nil {
-			t.logger.Warn("Ping gagal: %v", err)
+			t.logger.Warn("Ping gagal → paksa reconnect: %v", err)
+			client.Close()
+			select {
+			case t.disconCh <- err:
+			default:
+			}
 			return
 		}
 	}
