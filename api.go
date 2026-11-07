@@ -24,6 +24,7 @@ type APIServer struct {
 	tracker  *ConnTracker
 	dns      *DNSServer
 	router   *Router
+	limiter  *BandwidthLimiter
 	start    time.Time
 	srv      *http.Server
 	done     chan struct{}
@@ -37,10 +38,10 @@ type APIServer struct {
 	maxTraffic int
 }
 
-func NewAPIServer(cfg *Config, logger *Logger, tunnel *SSHTunnel, pm *ProxyManager, tr *ConnTracker, dns *DNSServer, router *Router) *APIServer {
+func NewAPIServer(cfg *Config, logger *Logger, tunnel *SSHTunnel, pm *ProxyManager, tr *ConnTracker, dns *DNSServer, router *Router, limiter *BandwidthLimiter) *APIServer {
 	a := &APIServer{
 		cfg: cfg, logger: logger, tunnel: tunnel,
-		proxyMgr: pm, tracker: tr, dns: dns, router: router,
+		proxyMgr: pm, tracker: tr, dns: dns, router: router, limiter: limiter,
 		start: time.Now(), done: make(chan struct{}),
 		maxTraffic: 120,
 	}
@@ -101,6 +102,8 @@ func (a *APIServer) Start() error {
 	mux.HandleFunc("/api/fakeip/stats", a.auth(a.handleFakeIPStats))
 	mux.HandleFunc("/api/logs", a.auth(a.handleLogs))
 	mux.HandleFunc("/api/config", a.auth(a.handleConfig))
+	mux.HandleFunc("/api/limiter", a.auth(a.handleLimiter))
+	mux.HandleFunc("/api/limiter/", a.auth(a.handleLimiterAction))
 
 	a.srv = &http.Server{Addr: a.cfg.API.Bind, Handler: mux}
 	go func() {
@@ -297,7 +300,6 @@ func (a *APIServer) handleRuleTest(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleFakeIPSave — POST /api/fakeip/save, paksa save sekarang.
 func (a *APIServer) handleFakeIPSave(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "method not allowed", 405)
@@ -319,7 +321,6 @@ func (a *APIServer) handleFakeIPSave(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleFakeIPStats — GET /api/fakeip/stats, info pool + file.
 func (a *APIServer) handleFakeIPStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
@@ -367,8 +368,63 @@ func (a *APIServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"redirect":        a.cfg.Redirect.Bind,
 		"conn_retention":  a.cfg.ConnRetention.D().String(),
 		"startup_timeout": a.cfg.StartupTimeout.D().String(),
-		"rules":           a.cfg.Rules,
+		"limiter": map[string]any{
+			"enabled": a.cfg.Limiter.Enabled,
+			"file":    a.cfg.Limiter.File,
+		},
+		"rules": a.cfg.Rules,
 	})
+}
+
+// ============ Limiter API ============
+
+// handleLimiter: GET list rules, POST create/update.
+func (a *APIServer) handleLimiter(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"enabled": a.limiter.Enabled(),
+			"file":    a.cfg.Limiter.File,
+			"rules":   a.limiter.List(),
+		})
+	case "POST":
+		var rule LimiterRule
+		if err := json.NewDecoder(r.Body).Decode(&rule); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if err := a.limiter.Set(rule); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		a.logger.Info("Limiter: set %s up=%dkbps down=%dkbps enabled=%v",
+			rule.IP, rule.UpKbps, rule.DownKbps, rule.Enabled)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	default:
+		http.Error(w, "method not allowed", 405)
+	}
+}
+
+// handleLimiterAction: DELETE /api/limiter/{ip}
+func (a *APIServer) handleLimiterAction(w http.ResponseWriter, r *http.Request) {
+	ip := strings.TrimPrefix(r.URL.Path, "/api/limiter/")
+	if ip == "" {
+		http.Error(w, "missing IP", 400)
+		return
+	}
+	if r.Method != "DELETE" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	if err := a.limiter.Delete(ip); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	a.logger.Info("Limiter: delete %s", ip)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
 
 func (a *APIServer) handleUI(w http.ResponseWriter, r *http.Request) {
