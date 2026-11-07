@@ -4,12 +4,12 @@
 
 server: host
 server_port: 443
-username: username
-password: password
+username: unme
+password: pw
 
 tunnel_type: proxy
 proxy_host: proxy_ip
-proxy_port: 80
+proxy_port: port
 use_default_payload: false
 custom_payload: "GET / HTTP/1.1[crlf]Host: edu.ruangguru.com[crlf]Connection: Keep-Alive[crlf][crlf]PATCH / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf][crlf][split]HTTP/ 69[crlf][crlf]"
 
@@ -98,5 +98,26 @@ state_file: /tmp/sockshttp-state.json
 # Fake-IP persist — file gzip JSON, ~30-45KB untuk 10k domain.
 # Kosongkan (""), atau hapus baris ini untuk disable persist.
 fakeip_file: /root/sockshttp-linux-arm64/sockshttp-fakeip.json.gz
+
+# ============================================================
+# Bandwidth Limiter (Control Plane)
+# ============================================================
+# Rules per-IP dikelola via WebUI/API dan disimpan permanen di `file`.
+# `enabled: false` → semua limit dinonaktifkan sementara, rules tetap
+# tersimpan dan bisa diaktifkan lagi tanpa kehilangan konfigurasi.
+#
+# Format `file` (JSON, dibuat otomatis oleh aplikasi):
+# {
+#   "version": 1,
+#   "rules": [
+#     {"ip": "192.168.1.6", "up_kbps": 512, "down_kbps": 2048, "enabled": true}
+#   ]
+# }
+#
+# Nilai dalam kilobit/detik. 0 = unlimited untuk arah itu.
+# Perubahan diterapkan ke koneksi BARU (koneksi aktif tetap pakai rate lama).
+limiter:
+  enabled: true
+  file: /tmp/sockshttp-limiter.json
 
 pid_file: /tmp/sockshttp.pid
