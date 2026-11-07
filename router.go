@@ -52,7 +52,6 @@ func (c *Connection) AddConn(cn net.Conn) {
 	c.connsMu.Unlock()
 }
 
-// setEnd menandai koneksi selesai. Return true jika ini yang pertama.
 func (c *Connection) setEnd(reason string) bool {
 	if c.Closed.CompareAndSwap(false, true) {
 		c.endReason.Store(reason)
@@ -196,7 +195,6 @@ func (ct *ConnTracker) pruneLoop() {
 			return
 		case <-tk.C:
 			ct.prune()
-			// Save totals tiap 60s
 			if time.Now().Unix()-ct.lastSave.Load() >= 60 {
 				ct.saveTotals()
 			}
@@ -243,7 +241,6 @@ func (ct *ConnTracker) New(srcIP, domain, dstHost string, dstPort int, rule, cha
 	ct.conns[id] = c
 	ct.order = append(ct.order, id)
 	for len(ct.order) > ct.maxSize {
-		// Coba evict oldest closed dulu
 		evicted := false
 		for i, oid := range ct.order {
 			if oc := ct.conns[oid]; oc != nil && oc.Closed.Load() {
@@ -437,8 +434,6 @@ func (ct *ConnTracker) AggregateBySrc() []SrcAggregate {
 	return out
 }
 
-// Shutdown menghentikan background prune loop dan menyimpan total byte.
-// (Sebelumnya bernama Close, yang bentrok dengan Close(id, reason).)
 func (ct *ConnTracker) Shutdown() {
 	ct.closedOnce.Do(func() {
 		close(ct.done)
@@ -520,6 +515,7 @@ type Router struct {
 	pool     *FakeIPPool
 	proxyMgr *ProxyManager
 	tracker  *ConnTracker
+	limiter  *BandwidthLimiter
 	rules    []*Rule
 
 	ln     net.Listener
@@ -527,10 +523,10 @@ type Router struct {
 	wg     sync.WaitGroup
 }
 
-func NewRouter(cfg *Config, logger *Logger, tunnel *SSHTunnel, dns *DNSServer, pool *FakeIPPool, pm *ProxyManager, tracker *ConnTracker) (*Router, error) {
+func NewRouter(cfg *Config, logger *Logger, tunnel *SSHTunnel, dns *DNSServer, pool *FakeIPPool, pm *ProxyManager, tracker *ConnTracker, limiter *BandwidthLimiter) (*Router, error) {
 	r := &Router{
 		cfg: cfg, logger: logger, tunnel: tunnel, dns: dns,
-		pool: pool, proxyMgr: pm, tracker: tracker,
+		pool: pool, proxyMgr: pm, tracker: tracker, limiter: limiter,
 	}
 	for _, rs := range cfg.Rules {
 		rule, err := parseRule(rs)
@@ -583,7 +579,6 @@ func (r *Router) dispatch(srcIP, dstIP, domain string) (proxy string, ruleStr st
 	return ProxyReject, "no-match", ""
 }
 
-// Test dipakai API untuk rule tester.
 func (r *Router) Test(srcIP, dstIP, domain string) (string, string, string) {
 	return r.dispatch(srcIP, dstIP, domain)
 }
@@ -668,14 +663,27 @@ func (r *Router) handleConn(raw net.Conn) {
 	}
 }
 
+// pipe — pipe dua arah dengan counter byte + limiter (jika enabled).
+//
+// Catatan penting: limiter di-wrap SELALU saat global enabled, tanpa cek
+// HasRule() di awal. Ini membuat rule yang ditambah/dihapus/diubah saat
+// koneksi sedang aktif ikut berlaku (delay maks 1 chunk = 16 KiB).
+// Cek per-chunk dilakukan di BandwidthLimiter.wait() — biayanya RLock +
+// map lookup (~50ns), nol efek ke throughput.
 func (r *Router) pipe(a, b net.Conn, track *Connection) {
 	track.AddConn(a)
 	track.AddConn(b)
 
+	useLimiter := r.limiter != nil && r.limiter.Enabled()
+
 	done := make(chan struct{}, 2)
 	go func() {
 		cw := &countingWriter{w: b, local: &track.BytesUp, global: &r.tracker.TotalUp}
-		io.Copy(cw, a)
+		var w io.Writer = cw
+		if useLimiter {
+			w = newLimitedWriter(cw, r.limiter, track.SrcIP, true)
+		}
+		io.Copy(w, a)
 		if tc, ok := b.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
@@ -683,7 +691,11 @@ func (r *Router) pipe(a, b net.Conn, track *Connection) {
 	}()
 	go func() {
 		cw := &countingWriter{w: a, local: &track.BytesDown, global: &r.tracker.TotalDown}
-		io.Copy(cw, b)
+		var w io.Writer = cw
+		if useLimiter {
+			w = newLimitedWriter(cw, r.limiter, track.SrcIP, false)
+		}
+		io.Copy(w, b)
 		if tc, ok := a.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
