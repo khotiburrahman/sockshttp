@@ -122,6 +122,12 @@ type Config struct {
 		FailureThreshold int      `yaml:"failure_threshold"`
 	} `yaml:"health_check"`
 
+	// Bandwidth limiter — Control Plane (rules per-IP disimpan di `file`).
+	Limiter struct {
+		Enabled bool   `yaml:"enabled"`
+		File    string `yaml:"file"`
+	} `yaml:"limiter"`
+
 	Log struct {
 		Level      string `yaml:"level"`
 		File       string `yaml:"file"`
@@ -167,6 +173,8 @@ func DefaultConfig() *Config {
 	c.HealthCheck.Timeout = Duration(10 * time.Second)
 	c.HealthCheck.Target = "1.1.1.1:53"
 	c.HealthCheck.FailureThreshold = 3
+	c.Limiter.Enabled = false
+	c.Limiter.File = "/tmp/sockshttp-limiter.json"
 	c.Log.Level = "info"
 	c.Log.File = "/var/log/sockshttp.log"
 	c.Log.MaxSizeMB = 10
