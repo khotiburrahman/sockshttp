@@ -119,10 +119,18 @@ func run() int {
 	tracker := NewConnTracker(cfg.StateFile, cfg.ConnRetention.D())
 	defer tracker.Shutdown()
 
+	// --- Bandwidth Limiter ---
+	limiter := NewBandwidthLimiter(cfg.Limiter.Enabled, cfg.Limiter.File, logger)
+	if cfg.Limiter.Enabled {
+		logger.Info("Limiter: enabled, %d rules dari %s", len(limiter.List()), cfg.Limiter.File)
+	} else {
+		logger.Info("Limiter: disabled (rules tetap tersimpan di %s)", cfg.Limiter.File)
+	}
+
 	dns := NewDNSServer(cfg, logger, pool, tunnel)
 	socks5 := NewSOCKS5Server(cfg, logger, tunnel, proxyMgr, pool, tracker)
 
-	router, err := NewRouter(cfg, logger, tunnel, dns, pool, proxyMgr, tracker)
+	router, err := NewRouter(cfg, logger, tunnel, dns, pool, proxyMgr, tracker, limiter)
 	if err != nil {
 		logger.Error("Router init: %v", err)
 		return 1
@@ -168,7 +176,7 @@ func run() int {
 		return 1
 	}
 
-	api := NewAPIServer(cfg, logger, tunnel, proxyMgr, tracker, dns, router)
+	api := NewAPIServer(cfg, logger, tunnel, proxyMgr, tracker, dns, router, limiter)
 	if err := api.Start(); err != nil {
 		logger.Error("API: %v", err)
 		return 1
@@ -200,7 +208,6 @@ func run() int {
 		dns.Close()
 	}
 
-	// Final save fake-IP (setelah listener ditutup, sebelum tunnel di-stop)
 	if cfg.DNS.Enabled && cfg.FakeIPFile != "" {
 		if err := pool.Save(); err != nil {
 			logger.Warn("fake-IP final save: %v", err)
