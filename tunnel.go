@@ -84,15 +84,16 @@ func dialSSHWithTimeout(client *ssh.Client, network, addr string, timeout time.D
 }
 
 type SSHTunnel struct {
-	cfg       *Config
-	logger    *Logger
-	mu        sync.RWMutex
-	client    *ssh.Client
-	state     atomic.Value
-	disconCh  chan error
-	reconnect atomic.Int64
-	lastErr   atomic.Value
-	connected atomic.Bool
+	cfg           *Config
+	logger        *Logger
+	mu            sync.RWMutex
+	client        *ssh.Client
+	state         atomic.Value
+	disconCh      chan error
+	reconnect     atomic.Int64
+	lastReconnect atomic.Int64 // Menyimpan Unix timestamp reconnect terakhir
+	lastErr       atomic.Value
+	connected     atomic.Bool
 }
 
 func NewSSHTunnel(cfg *Config, logger *Logger) *SSHTunnel {
@@ -358,9 +359,6 @@ func (t *SSHTunnel) dialOnce() error {
 	client := ssh.NewClient(sshConn, chans, reqs)
 
 	// --- Fase 3: warmup — pastikan minimal satu channel bisa dibuka ---
-	// Ini yang menutup jendela "state connected tapi Dial gagal", yang
-	// jadi penyebab HP/Telegram/YouTube retry beberapa detik setelah
-	// reconnect. Baru setelah warmup sukses, tunnel layak disebut ready.
 	warmupTarget := t.cfg.HealthCheck.Target
 	if warmupTarget == "" {
 		warmupTarget = "1.1.1.1:53"
@@ -475,6 +473,7 @@ func (t *SSHTunnel) Run(ctx context.Context) {
 			t.setState("disconnected")
 			t.cleanup()
 			t.reconnect.Add(1)
+			t.lastReconnect.Store(time.Now().Unix()) // Catat waktu reconnect terakhir
 		}
 
 		if !t.cfg.Reconnect.Enabled {
