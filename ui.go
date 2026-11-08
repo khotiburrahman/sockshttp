@@ -54,9 +54,9 @@ body::before{
     radial-gradient(ellipse 800px 400px at 20% -10%,rgba(88,166,255,0.06),transparent 60%),
     radial-gradient(ellipse 600px 300px at 80% 0%,rgba(163,113,247,0.04),transparent 60%);
 }
-::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar{width:6px;height:6px}
 ::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:#2d3641;border-radius:4px}
+::-webkit-scrollbar-thumb{background:#2d3641;border-radius:3px}
 ::-webkit-scrollbar-thumb:hover{background:#3d4754}
 code,pre,.mono{font-family:'JetBrains Mono',ui-monospace,monospace}
 
@@ -65,13 +65,13 @@ header{
   position:sticky;top:0;z-index:50;
   background:rgba(13,17,23,0.85);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
   border-bottom:1px solid var(--border);
-  padding:12px 24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+  padding:10px 24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;
 }
-.logo{display:flex;align-items:center;gap:10px;font-size:17px;font-weight:700;letter-spacing:-0.3px}
+.logo{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:700;letter-spacing:-0.3px}
 .logo-icon{
-  width:30px;height:30px;border-radius:8px;
+  width:28px;height:28px;border-radius:8px;
   background:linear-gradient(135deg,#58a6ff,#a371f7);
-  display:grid;place-items:center;font-size:16px;
+  display:grid;place-items:center;font-size:14px;
   box-shadow:0 4px 12px rgba(88,166,255,0.3);
 }
 .logo-text{
@@ -80,7 +80,7 @@ header{
 }
 .state-badge{
   display:inline-flex;align-items:center;gap:6px;
-  padding:5px 12px;border-radius:20px;font-size:11px;font-weight:600;
+  padding:4px 10px;border-radius:20px;font-size:11px;font-weight:600;
   text-transform:uppercase;letter-spacing:0.4px;
   transition:var(--t);
 }
@@ -100,36 +100,40 @@ header{
 
 /* ---------- NAV ---------- */
 nav{
-  position:sticky;top:59px;z-index:49;
+  position:sticky;top:53px;z-index:49;
   background:rgba(13,17,23,0.85);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
   border-bottom:1px solid var(--border);
-  padding:8px 24px;display:flex;gap:4px;
+  padding:6px 24px;display:flex;gap:4px;
   overflow-x:auto;
 }
 nav button{
   background:transparent;border:none;color:var(--text-muted);
-  padding:8px 16px;cursor:pointer;font-size:13px;font-weight:500;
+  padding:6px 14px;cursor:pointer;font-size:12px;font-weight:500;
   border-radius:var(--radius-sm);transition:var(--t);
   display:flex;align-items:center;gap:6px;white-space:nowrap;
   font-family:inherit;
 }
 nav button:hover{color:var(--text);background:var(--surface-hover)}
 nav button.active{color:var(--text);background:var(--surface-elev);box-shadow:var(--shadow-sm)}
-nav button .nav-icon{font-size:14px;opacity:0.8}
+nav button .nav-icon{font-size:13px;opacity:0.8}
 nav button.active .nav-icon{opacity:1}
 
 /* ---------- MAIN ---------- */
-main{padding:24px;max-width:1440px;margin:0 auto;position:relative;z-index:1}
+main{padding:16px 24px;max-width:1600px;margin:0 auto;position:relative;z-index:1}
 .tab{display:none;animation:fadeIn 0.25s ease-out}
 .tab.active{display:block}
-@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+
+/* ---------- DASHBOARD LAYOUT ---------- */
+.dash-grid{display:grid;grid-template-columns:1fr 340px;gap:16px;margin-bottom:16px}
+@media(max-width:1024px){.dash-grid{grid-template-columns:1fr}}
 
 /* ---------- STAT CARDS ---------- */
-.stat{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:20px}
+.stat{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px}
 .stat-card{
   background:linear-gradient(145deg,var(--surface) 0%,var(--bg-elev) 100%);
   border:1px solid var(--border);border-radius:var(--radius-lg);
-  padding:16px 18px;position:relative;overflow:hidden;
+  padding:12px 14px;position:relative;overflow:hidden;
   transition:var(--t);
 }
 .stat-card::before{
@@ -138,137 +142,135 @@ main{padding:24px;max-width:1440px;margin:0 auto;position:relative;z-index:1}
   opacity:0.5;transition:var(--t);
 }
 .stat-card:hover{border-color:var(--border-hover);transform:translateY(-1px);box-shadow:var(--shadow)}
-.stat-card:hover::before{opacity:1}
-.stat-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.stat-head{display:flex;align-items:center;gap:6px;margin-bottom:6px}
 .stat-icon{
-  width:28px;height:28px;border-radius:8px;
-  display:grid;place-items:center;font-size:14px;
+  width:24px;height:24px;border-radius:6px;
+  display:grid;place-items:center;font-size:12px;
   background:var(--card-icon-bg,var(--blue-bg));color:var(--card-accent,var(--blue));
 }
-.stat-label{color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:0.6px;font-weight:600}
-.stat-value{font-size:22px;font-weight:700;color:var(--text);line-height:1.1;letter-spacing:-0.4px;font-family:'Inter',sans-serif}
+.stat-label{color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600}
+.stat-value{font-size:18px;font-weight:700;color:var(--text);line-height:1.1;letter-spacing:-0.3px}
 .stat-value.accent{color:var(--card-accent,var(--blue))}
-.stat-value.small{font-size:16px;font-weight:600}
-.stat-sub{color:var(--text-subtle);font-size:11px;margin-top:6px;font-family:'JetBrains Mono',monospace}
-
-/* ---------- CARD ---------- */
-.card{
-  background:linear-gradient(145deg,var(--surface) 0%,var(--bg-elev) 100%);
-  border:1px solid var(--border);border-radius:var(--radius-lg);
-  padding:16px 18px;margin-bottom:16px;transition:var(--t);
-}
-.card-title{font-weight:600;color:var(--text);margin-bottom:14px;font-size:14px;display:flex;align-items:center;gap:8px}
-.card-title::before{
-  content:'';width:3px;height:14px;background:var(--blue);border-radius:2px;
-}
+.stat-value.small{font-size:14px;font-weight:600}
+.stat-sub{color:var(--text-subtle);font-size:10px;margin-top:4px;font-family:'JetBrains Mono',monospace}
 
 /* ---------- CHART ---------- */
 .chart-wrap{
   background:linear-gradient(145deg,var(--surface) 0%,var(--bg-elev) 100%);
   border:1px solid var(--border);border-radius:var(--radius-lg);
-  padding:16px;margin-bottom:20px;
+  padding:12px;margin-bottom:0;
 }
-.chart-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
-.chart-title{font-size:13px;font-weight:600;color:var(--text)}
-.chart-legend{display:flex;gap:16px;font-size:11px;color:var(--text-muted);font-weight:500}
-.chart-legend span{display:flex;align-items:center;gap:6px}
-.chart-legend .dot{width:8px;height:8px;border-radius:50%}
-#chart{width:100%;height:120px;display:block}
-.chart-range{color:var(--text-subtle);font-size:11px;font-family:'JetBrains Mono',monospace;margin-top:8px;text-align:right}
+.chart-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.chart-title{font-size:12px;font-weight:600;color:var(--text)}
+.chart-legend{display:flex;gap:12px;font-size:10px;color:var(--text-muted);font-weight:500}
+.chart-legend span{display:flex;align-items:center;gap:4px}
+.chart-legend .dot{width:6px;height:6px;border-radius:50%}
+#chart{width:100%;height:100px;display:block}
+.chart-range{color:var(--text-subtle);font-size:10px;font-family:'JetBrains Mono',monospace;margin-top:4px;text-align:right}
 
-/* ---------- TABLE ---------- */
-.tbl-wrap{border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;background:var(--surface)}
-table{width:100%;border-collapse:collapse;background:transparent}
+/* ---------- PROXY GROUPS (RIGHT SIDE) ---------- */
+.groups-wrap{
+  background:linear-gradient(145deg,var(--surface) 0%,var(--bg-elev) 100%);
+  border:1px solid var(--border);border-radius:var(--radius-lg);
+  padding:12px;display:flex;flex-direction:column;max-height:400px;overflow:hidden;
+}
+.groups-header{font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.groups-header::before{content:'';width:3px;height:12px;background:var(--blue);border-radius:2px}
+.groups-container{overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:8px;padding-right:4px}
+.group-card{
+  background:var(--bg-elev);border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:8px 10px;transition:var(--t);
+}
+.group-card:hover{border-color:var(--border-hover)}
+.group-name{font-weight:600;color:var(--text-muted);font-size:11px;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px}
+.group-buttons{display:flex;gap:4px;flex-wrap:wrap}
+.group-btn{
+  background:var(--surface);border:1px solid var(--border);
+  color:var(--text-muted);padding:4px 10px;border-radius:4px;
+  cursor:pointer;font-size:11px;font-weight:600;transition:var(--t);font-family:inherit;
+}
+.group-btn:hover{background:var(--surface-hover);border-color:var(--border-hover);color:var(--text)}
+.group-btn.active{background:var(--blue);border-color:var(--blue);color:#fff;box-shadow:0 2px 6px rgba(88,166,255,0.2)}
+.group-btn.reject.active{background:var(--red);border-color:var(--red);box-shadow:0 2px 6px rgba(248,81,73,0.2)}
+.group-btn.direct.active{background:var(--green);border-color:var(--green);box-shadow:0 2px 6px rgba(63,185,80,0.2)}
+
+/* ---------- TABLE WRAP & STICKY ---------- */
+.tbl-wrap{
+  border:1px solid var(--border);border-radius:var(--radius-lg);
+  background:var(--surface);overflow-x:auto;position:relative;
+}
+table{width:100%;border-collapse:separate;border-spacing:0;min-width:800px}
 th{
-  background:var(--bg-elev);padding:11px 14px;text-align:left;
+  background:var(--bg-elev);padding:10px 12px;text-align:left;
   font-weight:600;color:var(--text-muted);font-size:11px;
   text-transform:uppercase;letter-spacing:0.6px;
   border-bottom:1px solid var(--border);white-space:nowrap;
+  position:sticky;top:0;z-index:10;
 }
 td{
-  padding:12px 14px;border-top:1px solid var(--border);
-  font-size:12px;vertical-align:middle;
-  color:var(--text);
+  padding:10px 12px;border-bottom:1px solid var(--border);
+  font-size:12px;vertical-align:middle;color:var(--text);
+  background:var(--surface); /* Wajib untuk sticky col */
 }
-td.mono,.mono{font-family:'JetBrains Mono',monospace;font-size:11.5px}
 tbody tr{transition:background 0.1s}
-tbody tr:hover{background:var(--surface-hover)}
-tbody tr.selected{background:rgba(88,166,255,0.06)}
-tr.closed-row{opacity:0.55}
-tr.closed-row:hover{opacity:0.9}
+tbody tr:hover td{background:var(--surface-hover)}
+tbody tr.selected td{background:rgba(88,166,255,0.06)}
+tr.closed-row td{opacity:0.55}
+
+/* Sticky First Column */
+.sticky-col{position:sticky;left:0;z-index:5;border-right:1px solid var(--border)}
+th.sticky-col{z-index:15}
 
 /* ---------- TAGS / BADGES ---------- */
 .tag{
   display:inline-flex;align-items:center;gap:4px;
-  padding:3px 9px;border-radius:5px;font-size:10.5px;font-weight:600;
+  padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;
   text-transform:uppercase;letter-spacing:0.3px;
 }
 .tag-TUNNEL{background:var(--blue-bg);color:var(--blue)}
 .tag-DIRECT{background:var(--green-bg);color:var(--green)}
 .tag-REJECT{background:var(--red-bg);color:var(--red)}
 
-/* ---------- GROUP BUTTONS ---------- */
-.group-card{
-  background:linear-gradient(145deg,var(--surface) 0%,var(--bg-elev) 100%);
-  border:1px solid var(--border);border-radius:var(--radius-lg);
-  padding:14px 16px;margin-bottom:10px;transition:var(--t);
-}
-.group-card:hover{border-color:var(--border-hover)}
-.group-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
-.group-name{font-weight:600;color:var(--text);font-size:13px}
-.group-buttons{display:flex;gap:6px;flex-wrap:wrap}
-.group-btn{
-  background:var(--bg-elev);border:1px solid var(--border);
-  color:var(--text-muted);padding:7px 14px;border-radius:7px;
-  cursor:pointer;font-size:12px;font-weight:500;
-  transition:var(--t);font-family:inherit;
-}
-.group-btn:hover{background:var(--surface-elev);border-color:var(--border-hover);color:var(--text)}
-.group-btn.active{background:var(--blue);border-color:var(--blue);color:#fff;box-shadow:0 2px 8px rgba(88,166,255,0.3)}
-.group-btn.reject.active{background:var(--red);border-color:var(--red);box-shadow:0 2px 8px rgba(248,81,73,0.3)}
-.group-btn.direct.active{background:var(--green);border-color:var(--green);box-shadow:0 2px 8px rgba(63,185,80,0.3)}
-
 /* ---------- FILTER BAR ---------- */
 .filter-bar{
-  display:flex;gap:8px;align-items:center;margin-bottom:16px;
+  display:flex;gap:8px;align-items:center;margin-bottom:12px;
   background:var(--surface);border:1px solid var(--border);
-  border-radius:var(--radius-lg);padding:10px 12px;flex-wrap:wrap;
+  border-radius:var(--radius-lg);padding:8px 12px;flex-wrap:wrap;
 }
 .filter-bar input[type=text],.filter-bar input[type=number],.filter-bar select{
   background:var(--bg-elev);border:1px solid var(--border);
   border-radius:var(--radius-sm);color:var(--text);
-  padding:8px 12px;font-size:12.5px;min-width:150px;
+  padding:6px 10px;font-size:12px;min-width:140px;
   transition:var(--t);font-family:inherit;
 }
 .filter-bar input:focus,.filter-bar select:focus{
   outline:none;border-color:var(--blue);
-  box-shadow:0 0 0 3px rgba(88,166,255,0.15);
+  box-shadow:0 0 0 2px rgba(88,166,255,0.15);
 }
 .filter-bar label{
-  display:flex;align-items:center;gap:6px;color:var(--text-muted);
-  font-size:12.5px;cursor:pointer;user-select:none;
+  display:flex;align-items:center;gap:4px;color:var(--text-muted);
+  font-size:12px;cursor:pointer;user-select:none;
 }
 input[type=checkbox]{
-  appearance:none;width:15px;height:15px;border-radius:4px;
+  appearance:none;width:14px;height:14px;border-radius:3px;
   border:1.5px solid var(--border-hover);background:var(--bg-elev);
   cursor:pointer;position:relative;transition:var(--t);vertical-align:middle;
 }
 input[type=checkbox]:checked{background:var(--blue);border-color:var(--blue)}
 input[type=checkbox]:checked::after{
   content:'✓';position:absolute;top:50%;left:50%;
-  transform:translate(-50%,-50%);color:#fff;font-size:10px;font-weight:700;
+  transform:translate(-50%,-50%);color:#fff;font-size:9px;font-weight:700;
 }
 
 /* ---------- BUTTONS ---------- */
 .btn{
   background:var(--surface-elev);border:1px solid var(--border);
-  color:var(--text);padding:8px 14px;border-radius:var(--radius-sm);
-  cursor:pointer;font-size:12.5px;font-weight:500;
+  color:var(--text);padding:6px 12px;border-radius:var(--radius-sm);
+  cursor:pointer;font-size:12px;font-weight:500;
   transition:var(--t);white-space:nowrap;
-  display:inline-flex;align-items:center;gap:6px;font-family:inherit;
+  display:inline-flex;align-items:center;gap:4px;font-family:inherit;
 }
-.btn:hover:not(:disabled){background:var(--surface-hover);border-color:var(--border-hover);transform:translateY(-1px)}
-.btn:active:not(:disabled){transform:translateY(0)}
+.btn:hover:not(:disabled){background:var(--surface-hover);border-color:var(--border-hover)}
 .btn:disabled{opacity:0.4;cursor:not-allowed}
 .btn-primary{background:var(--blue);border-color:var(--blue);color:#fff}
 .btn-primary:hover:not(:disabled){background:var(--blue-hover);border-color:var(--blue-hover)}
@@ -276,7 +278,7 @@ input[type=checkbox]:checked::after{
 .btn-danger:hover:not(:disabled){background:rgba(248,81,73,0.2);border-color:var(--red)}
 .btn-icon{
   background:transparent;border:none;color:var(--text-muted);
-  cursor:pointer;padding:6px 8px;border-radius:5px;font-size:14px;
+  cursor:pointer;padding:4px 6px;border-radius:4px;font-size:13px;
   transition:var(--t);
 }
 .btn-icon:hover{background:var(--surface-hover);color:var(--text)}
@@ -285,75 +287,64 @@ input[type=checkbox]:checked::after{
 
 /* ---------- SUB TABS ---------- */
 .sub-tabs{
-  display:inline-flex;gap:2px;margin-bottom:16px;
+  display:inline-flex;gap:2px;margin-bottom:12px;
   background:var(--surface);border:1px solid var(--border);
-  border-radius:var(--radius);padding:3px;
+  border-radius:var(--radius);padding:2px;
 }
 .sub-tabs button{
   background:transparent;border:none;color:var(--text-muted);
-  padding:8px 16px;cursor:pointer;font-size:12.5px;font-weight:500;
-  border-radius:7px;transition:var(--t);font-family:inherit;
+  padding:6px 14px;cursor:pointer;font-size:12px;font-weight:500;
+  border-radius:6px;transition:var(--t);font-family:inherit;
 }
 .sub-tabs button:hover{color:var(--text)}
 .sub-tabs button.active{color:var(--text);background:var(--surface-elev);box-shadow:var(--shadow-sm)}
 
-/* ---------- LOGS ---------- */
+/* ---------- LOGS & CONFIG ---------- */
 #logbox{
   background:#06090d;border:1px solid var(--border);
-  border-radius:var(--radius-lg);padding:14px 16px;
-  height:calc(100vh - 260px);min-height:400px;overflow-y:auto;
+  border-radius:var(--radius-lg);padding:12px 14px;
+  height:calc(100vh - 220px);overflow-y:auto;
   font-family:'JetBrains Mono',ui-monospace,monospace;
-  font-size:12px;line-height:1.6;
-  white-space:pre-wrap;word-break:break-all;
-  color:#c9d1d9;
+  font-size:11.5px;line-height:1.6;
+  white-space:pre-wrap;word-break:break-all;color:#c9d1d9;
 }
-
-/* ---------- CONFIG ---------- */
 #configBox{
   background:var(--surface);border:1px solid var(--border);
-  border-radius:var(--radius-lg);padding:18px;
+  border-radius:var(--radius-lg);padding:16px;
   overflow-x:auto;font-family:'JetBrains Mono',monospace;
   font-size:12px;line-height:1.7;color:var(--text);
 }
 
-/* ---------- EMPTY / SKELETON ---------- */
-.empty{text-align:center;color:var(--text-subtle);padding:48px 20px;font-style:italic;font-size:13px}
-.skeleton{
-  background:linear-gradient(90deg,var(--surface) 25%,var(--surface-hover) 50%,var(--surface) 75%);
-  background-size:200% 100%;animation:shimmer 1.5s infinite;
-  border-radius:6px;height:14px;
-}
-@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
-
-/* ---------- HINT ---------- */
+/* ---------- EMPTY / HINT ---------- */
+.empty{text-align:center;color:var(--text-subtle);padding:32px 16px;font-style:italic;font-size:12px}
 .hint{
-  color:var(--text-muted);font-size:12.5px;
+  color:var(--text-muted);font-size:12px;
   background:var(--surface);border:1px solid var(--border);
   border-left:3px solid var(--blue);
-  padding:12px 16px;border-radius:var(--radius);margin-bottom:16px;
-  line-height:1.6;
+  padding:10px 14px;border-radius:var(--radius);margin-bottom:12px;
+  line-height:1.5;
 }
 .hint code{
-  background:var(--surface-elev);padding:2px 6px;border-radius:4px;
-  font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--blue);
+  background:var(--surface-elev);padding:1px 5px;border-radius:3px;
+  font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--blue);
 }
 .hint b{color:var(--text)}
 
 /* ---------- BADGE ---------- */
-.badge-on{padding:3px 10px;border-radius:5px;font-size:10.5px;font-weight:600;background:var(--green-bg);color:var(--green);text-transform:uppercase;letter-spacing:0.3px}
-.badge-off{padding:3px 10px;border-radius:5px;font-size:10.5px;font-weight:600;background:var(--red-bg);color:var(--red);text-transform:uppercase;letter-spacing:0.3px}
+.badge-on{padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;background:var(--green-bg);color:var(--green);text-transform:uppercase}
+.badge-off{padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;background:var(--red-bg);color:var(--red);text-transform:uppercase}
 
 /* ---------- TOAST ---------- */
 #toastContainer{
-  position:fixed;bottom:24px;right:24px;z-index:9999;
+  position:fixed;bottom:20px;right:20px;z-index:9999;
   display:flex;flex-direction:column;gap:8px;pointer-events:none;
 }
 .toast{
   background:var(--surface-elev);border:1px solid var(--border-hover);
-  color:var(--text);padding:12px 18px;border-radius:var(--radius);
-  font-size:13px;font-weight:500;box-shadow:var(--shadow-lg);
+  color:var(--text);padding:10px 16px;border-radius:var(--radius);
+  font-size:12px;font-weight:500;box-shadow:var(--shadow-lg);
   transform:translateX(120%);opacity:0;transition:all 0.3s cubic-bezier(0.4,0,0.2,1);
-  max-width:360px;pointer-events:auto;
+  max-width:320px;pointer-events:auto;
 }
 .toast.show{transform:translateX(0);opacity:1}
 .toast.success{border-left:3px solid var(--green)}
@@ -361,10 +352,9 @@ input[type=checkbox]:checked::after{
 .toast.info{border-left:3px solid var(--blue)}
 .toast.warn{border-left:3px solid var(--yellow)}
 
-/* ---------- SPACER ---------- */
 .spacer{flex:1}
-.src-link{color:var(--blue);cursor:pointer;text-decoration:none;font-family:'JetBrains Mono',monospace;font-size:11.5px;transition:var(--t)}
-.src-link:hover{color:var(--blue-hover);text-decoration:underline}
+.src-link{color:var(--blue);cursor:pointer;text-decoration:none;font-family:'JetBrains Mono',monospace;font-size:11.5px}
+.src-link:hover{text-decoration:underline}
 .speed{color:var(--green);font-size:11px;font-family:'JetBrains Mono',monospace}
 .speed-down{color:var(--blue);font-size:11px;font-family:'JetBrains Mono',monospace}
 .reason{color:var(--text-muted);font-size:11px;font-family:'JetBrains Mono',monospace}
@@ -372,27 +362,26 @@ input[type=checkbox]:checked::after{
 .section-h{
   font-size:11px;color:var(--text-muted);
   text-transform:uppercase;letter-spacing:0.8px;
-  margin:24px 0 12px;font-weight:700;
-  display:flex;align-items:center;gap:10px;
+  margin:16px 0 8px;font-weight:700;
+  display:flex;align-items:center;gap:8px;
 }
 .section-h::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,var(--border),transparent)}
 
-/* ---------- RESPONSIVE ---------- */
+/* Quick Add Row di Limiter */
+.quick-add-row td { background: rgba(88,166,255,0.03); padding: 6px 10px; }
+.quick-add-row input, .quick-add-row select { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 4px 8px; border-radius: 4px; font-size: 11px; width: 100%; }
+.quick-add-row input:focus, .quick-add-row select:focus { outline: none; border-color: var(--blue); }
+
 @media(max-width:768px){
-  header{padding:10px 16px;gap:10px}
+  header{padding:8px 12px}
   .header-info{display:none}
-  nav{padding:6px 12px}
-  main{padding:16px}
+  nav{padding:4px 12px;top:49px}
+  main{padding:12px}
   .stat{grid-template-columns:repeat(2,1fr)}
-  .stat-card{padding:12px 14px}
-  .stat-value{font-size:18px}
-  th,td{padding:8px 10px;font-size:11.5px}
-  .filter-bar{padding:8px}
-  .filter-bar input,.filter-bar select{min-width:0;flex:1;padding:6px 10px;font-size:12px}
-  .filter-bar .btn{padding:6px 10px;font-size:11.5px}
-  .btn{padding:7px 12px;font-size:12px}
-  #logbox{height:calc(100vh - 240px);font-size:11px}
-  .toast{max-width:calc(100vw - 32px)}
+  .filter-bar{padding:6px}
+  .filter-bar input,.filter-bar select{min-width:0;flex:1;font-size:11px;padding:4px 8px}
+  .btn{padding:5px 10px;font-size:11px}
+  #logbox{height:calc(100vh - 180px)}
 }
 </style>
 </head>
@@ -424,43 +413,53 @@ input[type=checkbox]:checked::after{
 <div id="tab-dashboard" class="tab active">
   <div class="stat" id="statsRow"></div>
 
-  <div class="chart-wrap">
-    <div class="chart-header">
-      <span class="chart-title">Live Traffic</span>
-      <div class="chart-legend">
-        <span><span class="dot" style="background:var(--green)"></span>Upload</span>
-        <span><span class="dot" style="background:var(--blue)"></span>Download</span>
+  <div class="dash-grid">
+    <!-- KIRI: Chart & Devices -->
+    <div>
+      <div class="chart-wrap">
+        <div class="chart-header">
+          <span class="chart-title">Live Traffic</span>
+          <div class="chart-legend">
+            <span><span class="dot" style="background:var(--green)"></span>Upload</span>
+            <span><span class="dot" style="background:var(--blue)"></span>Download</span>
+          </div>
+        </div>
+        <svg id="chart" viewBox="0 0 600 100" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="gradUp" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#3fb950" stop-opacity="0.3"/>
+              <stop offset="100%" stop-color="#3fb950" stop-opacity="0"/>
+            </linearGradient>
+            <linearGradient id="gradDown" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#58a6ff" stop-opacity="0.3"/>
+              <stop offset="100%" stop-color="#58a6ff" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <polygon id="areaUp" fill="url(#gradUp)" points=""/>
+          <polygon id="areaDown" fill="url(#gradDown)" points=""/>
+          <polyline id="chartUp" fill="none" stroke="#3fb950" stroke-width="1.5" points=""/>
+          <polyline id="chartDown" fill="none" stroke="#58a6ff" stroke-width="1.5" points=""/>
+        </svg>
+        <div class="chart-range" id="chartRange"></div>
+      </div>
+
+      <div class="section-h">Devices</div>
+      <div class="tbl-wrap" style="max-height:250px;overflow-y:auto">
+        <table>
+          <thead><tr><th>Src IP</th><th>Active</th><th>Total</th><th>Up</th><th>Down</th></tr></thead>
+          <tbody id="devicesBody"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
+        </table>
       </div>
     </div>
-    <svg id="chart" viewBox="0 0 600 120" preserveAspectRatio="none">
-      <defs>
-        <linearGradient id="gradUp" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#3fb950" stop-opacity="0.3"/>
-          <stop offset="100%" stop-color="#3fb950" stop-opacity="0"/>
-        </linearGradient>
-        <linearGradient id="gradDown" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#58a6ff" stop-opacity="0.3"/>
-          <stop offset="100%" stop-color="#58a6ff" stop-opacity="0"/>
-        </linearGradient>
-      </defs>
-      <polygon id="areaUp" fill="url(#gradUp)" points=""/>
-      <polygon id="areaDown" fill="url(#gradDown)" points=""/>
-      <polyline id="chartUp" fill="none" stroke="#3fb950" stroke-width="1.8" points="" stroke-linejoin="round"/>
-      <polyline id="chartDown" fill="none" stroke="#58a6ff" stroke-width="1.8" points="" stroke-linejoin="round"/>
-    </svg>
-    <div class="chart-range" id="chartRange"></div>
-  </div>
 
-  <div class="section-h">Devices</div>
-  <div class="tbl-wrap">
-    <table>
-      <thead><tr><th>Src IP</th><th>Active</th><th>Total</th><th>Up</th><th>Down</th></tr></thead>
-      <tbody id="devicesBody"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
-    </table>
+    <!-- KANAN: Proxy Groups -->
+    <div class="groups-wrap">
+      <div class="groups-header">Proxy Groups</div>
+      <div class="groups-container" id="groupsContainer">
+        <div class="empty">Loading...</div>
+      </div>
+    </div>
   </div>
-
-  <div class="section-h">Proxy Groups</div>
-  <div id="groupsContainer"><div class="empty">Loading...</div></div>
 </div>
 
 <!-- CONNECTIONS -->
@@ -489,7 +488,7 @@ input[type=checkbox]:checked::after{
   <div class="tbl-wrap">
     <table>
       <thead><tr>
-        <th style="width:36px;text-align:center"><input type="checkbox" id="selAll" onchange="toggleAllConns(this)"></th>
+        <th class="sticky-col" style="width:40px;text-align:center"><input type="checkbox" id="selAll" onchange="toggleAllConns(this)"></th>
         <th>Time</th>
         <th>Src IP</th>
         <th>Destination</th>
@@ -499,7 +498,7 @@ input[type=checkbox]:checked::after{
         <th>Down</th>
         <th id="thSpeed">Speed</th>
         <th id="thEnd" style="display:none">End</th>
-        <th style="width:36px"></th>
+        <th style="width:40px"></th>
       </tr></thead>
       <tbody id="connBody"><tr><td colspan="11" class="empty">Loading...</td></tr></tbody>
     </table>
@@ -509,17 +508,22 @@ input[type=checkbox]:checked::after{
 <!-- LIMITER -->
 <div id="tab-limiter" class="tab">
   <div class="hint">
-    Atur limit kecepatan <b>per IP</b> untuk traffic yang lewat <code>REDIRECT</code> (router).
-    Nilai dalam <b>kilobit/detik</b> (0 = unlimited). Rules tersimpan permanen ke file JSON
-    di YAML. Perubahan berlaku realtime, termasuk ke koneksi <i>yang sedang aktif</i>.
+    Atur limit kecepatan <b>per IP</b>. Nilai dalam <b>kilobit/detik</b> (0 = unlimited). 
+    Pilih IP dari daftar (diambil dari Rules/Devices) atau pilih <code>-- custom --</code> untuk ketik manual.
   </div>
 
   <div id="limiterInfo" class="hint"></div>
 
   <div class="filter-bar">
-    <input type="text" id="limIP" placeholder="IP address, e.g. 192.168.1.6" style="min-width:200px">
-    <input type="number" id="limUp" placeholder="⬆ Up kbps (0=off)" min="0" style="min-width:150px">
-    <input type="number" id="limDown" placeholder="⬇ Down kbps (0=off)" min="0" style="min-width:150px">
+    <!-- Dropdown IP Utama -->
+    <select id="limIPSelect" onchange="handleIPSelect(this)" style="min-width:160px; font-weight:600; color:var(--blue)">
+      <option value="">-- Pilih IP --</option>
+    </select>
+    <!-- Input Custom (Tersembunyi sampai pilih -- custom --) -->
+    <input type="text" id="limIPCustom" placeholder="Ketik IP manual..." style="display:none; min-width:160px">
+    
+    <input type="number" id="limUp" placeholder="⬆ Up kbps (0=off)" min="0" style="min-width:130px">
+    <input type="number" id="limDown" placeholder="⬇ Down kbps (0=off)" min="0" style="min-width:130px">
     <label><input type="checkbox" id="limEnabled" checked> Enabled</label>
     <button class="btn btn-primary" onclick="saveLimiterRule()">Save / Update</button>
     <button class="btn" onclick="resetLimiterForm()">Reset</button>
@@ -530,13 +534,13 @@ input[type=checkbox]:checked::after{
   <div class="tbl-wrap">
     <table>
       <thead><tr>
-        <th>IP</th>
+        <th>IP Address</th>
         <th>⬆ Up (kbps)</th>
         <th>⬇ Down (kbps)</th>
         <th>Status</th>
-        <th style="width:110px">Action</th>
+        <th style="width:100px">Action</th>
       </tr></thead>
-      <tbody id="limiterBody"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
+      <tbody id="limiterBody"></tbody>
     </table>
   </div>
 </div>
@@ -583,6 +587,14 @@ function fmtSpeed(bps){
   if(bps<1073741824)return (bps/1048576).toFixed(2)+" MB/s";
   return (bps/1073741824).toFixed(2)+" GB/s";
 }
+function fmtUptime(sec){
+  if(!sec || sec < 0) return '0m';
+  if(sec < 60) return sec + 's';
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (h > 0) return h + 'h ' + m + 'm';
+  return m + 'm';
+}
 function toast(msg,type){
   type=type||'info';
   const c=document.getElementById('toastContainer');
@@ -624,20 +636,19 @@ async function loadStatus(){
     document.getElementById('versionInfo').textContent='v'+(d.version||'?');
 
     const stateColor=state==='connected'?'var(--green)':(state==='connecting'?'var(--yellow)':'var(--red)');
+    
     document.getElementById('statsRow').innerHTML=
       card('◉','State',esc(state),'accent',stateColor)+
-      card('⏱','Uptime',Math.floor((d.uptime_sec||0)/60)+'m','')+
+      card('⏱','Uptime',fmtUptime(d.uptime_sec),'')+
       card('⬆','Upload',fmtSpeed(d.speed_up),'accent','var(--green)','Total: '+fmtBytes(d.total_up))+
       card('⬇','Download',fmtSpeed(d.speed_down),'accent','var(--blue)','Total: '+fmtBytes(d.total_down))+
       card('⇄','Active',d.active_conns||0,'')+
       card('✓','Closed',d.closed_conns||0,'')+
-      card('↻','Reconnects',d.reconnects||0,'')+
-      card('◇','DNS',d.dns_queries||0,'small','var(--purple)','pool '+(d.dns_pool?d.dns_pool.size:0)+', hit '+(d.dns_pool?d.dns_pool.hits:0));
+      card('↻','Reconnects',d.reconnects||0,'small','var(--purple)')+
+      card('◇','DNS',d.dns_queries||0,'small','var(--purple)','pool '+(d.dns_pool?d.dns_pool.size:0));
   }catch(e){console.error(e)}
 }
 function card(icon,label,value,extra,accent,sub){
-  const style='';
-  const colorAttr=accent?'style="--card-accent:'+accent+';--card-icon-bg:'+accent.replace('var(--','').replace(')','')+'-bg"':'';
   let accentVar='';
   if(accent && accent.startsWith('var(--')){
     accentVar=accent.replace('var(--','').replace(')','');
@@ -660,7 +671,7 @@ async function loadTraffic(){
   }catch(e){}
 }
 function drawChart(samples){
-  const W=600,H=120,pad=4;
+  const W=600,H=100,pad=4;
   if(samples.length===0)return;
   let maxVal=1;
   samples.forEach(s=>{if(s.up>maxVal)maxVal=s.up;if(s.down>maxVal)maxVal=s.down;});
@@ -675,7 +686,6 @@ function drawChart(samples){
   function area(key){
     const p=pts(key);
     if(!p)return '';
-    const first=samples[0], last=samples[samples.length-1];
     return '0,'+H+' '+p+' '+W+','+H;
   }
   document.getElementById('chartUp').setAttribute('points',pts('up'));
@@ -705,12 +715,17 @@ async function loadDevices(){
         '<td class="bytes">'+fmtBytes(dev.down)+'</td>'+
       '</tr>'
     ).join('');
+    
+    // Update filter dropdown
     const sel=document.getElementById('filterSrc');
     const cur=sel.value;
     let opts='<option value="">All sources</option>';
     d.devices.forEach(dev=>{opts+='<option value="'+esc(dev.srcIP)+'">'+esc(dev.srcIP)+'</option>';});
     sel.innerHTML=opts;
     sel.value=cur;
+
+    // Update Limiter Dropdowns
+    populateIPDropdowns(d.devices);
   }catch(e){}
 }
 function filterBySrc(ip){
@@ -736,7 +751,7 @@ async function loadProxies(){
         const cls='group-btn '+p.toLowerCase().replace(/_/g,'-')+(g.now===p?' active':'');
         return '<button class="'+cls+'" onclick="switchProxy(\''+esc(g.name)+'\',\''+esc(p)+'\')">'+esc(p)+'</button>';
       }).join('');
-      return '<div class="group-card"><div class="group-header"><div class="group-name">'+esc(g.name)+'</div></div><div class="group-buttons">'+btns+'</div></div>';
+      return '<div class="group-card"><div class="group-name">'+esc(g.name)+'</div><div class="group-buttons">'+btns+'</div></div>';
     }).join('');
   }catch(e){}
 }
@@ -841,7 +856,7 @@ function renderConnections(){
       speedCell='<td><span class="speed">'+fmtSpeed(upSpd)+'</span><br><span class="speed-down">'+fmtSpeed(downSpd)+'</span></td>';
     }
     return '<tr class="'+selCls+(isActive?'':' closed-row')+'">'+
-      '<td style="text-align:center">'+(isActive?'<input type="checkbox" '+checked+' onchange="toggleConn(\''+esc(c.id)+'\',this)">':'')+'</td>'+
+      '<td class="sticky-col" style="text-align:center">'+(isActive?'<input type="checkbox" '+checked+' onchange="toggleConn(\''+esc(c.id)+'\',this)">':'')+'</td>'+
       '<td class="mono">'+ts+'</td>'+
       '<td class="mono">'+esc(c.srcIP)+'</td>'+
       '<td class="mono" title="'+esc(dst)+':'+c.dstPort+'">'+esc(dst)+':'+c.dstPort+'</td>'+
@@ -942,6 +957,91 @@ async function killAllConns(){
 }
 
 // ============ limiter ============
+let cachedConfig = null;
+
+async function loadConfigData() {
+    if (cachedConfig) return cachedConfig;
+    try {
+        const r = await fetch('/api/config');
+        cachedConfig = await r.json();
+        return cachedConfig;
+    } catch(e) { return null; }
+}
+
+// Mengisi dropdown IP (baik form atas maupun Quick Add) dari Rules + Devices + Existing Limits
+async function populateIPDropdowns(activeDevices) {
+    const selectTop = document.getElementById('limIPSelect');
+    const selectBottom = document.getElementById('qaIPSelect');
+    let ips = new Set();
+    
+    // 1. Ambil dari Active Devices
+    if (activeDevices) {
+        activeDevices.forEach(d => ips.add(d.srcIP));
+    }
+    
+    // 2. Ambil dari Config Rules (SRC-IP-CIDR)
+    const cfg = await loadConfigData();
+    if (cfg && cfg.rules) {
+        cfg.rules.forEach(rule => {
+            const parts = rule.split(',');
+            if (parts[0].trim() === 'SRC-IP-CIDR' && parts[1]) {
+                const ip = parts[1].split('/')[0].trim(); // Hapus /32
+                if (ip) ips.add(ip);
+            }
+        });
+    }
+
+    // 3. Ambil dari Limiter Rules yang ada
+    try {
+        const r = await fetch('/api/limiter');
+        const d = await r.json();
+        if (d.rules) d.rules.forEach(x => ips.add(x.ip));
+    } catch(e) {}
+
+    const sortedIPs = Array.from(ips).sort();
+    const curTopVal = selectTop.value;
+    const curBottomVal = selectBottom ? selectBottom.value : '';
+
+    let opts = '<option value="">-- Pilih IP --</option>';
+    sortedIPs.forEach(ip => {
+        opts += '<option value="'+ip+'">'+ip+'</option>';
+    });
+    opts += '<option value="custom" style="color:var(--yellow);font-weight:bold">-- custom --</option>';
+    
+    if (selectTop) {
+        selectTop.innerHTML = opts;
+        if (sortedIPs.includes(curTopVal)) selectTop.value = curTopVal;
+    }
+    if (selectBottom) {
+        selectBottom.innerHTML = opts;
+        if (sortedIPs.includes(curBottomVal)) selectBottom.value = curBottomVal;
+    }
+}
+
+// Event handler ketika dropdown top diganti
+function handleIPSelect(sel) {
+    const custom = document.getElementById('limIPCustom');
+    if (sel.value === 'custom') {
+        custom.style.display = 'inline-block';
+        custom.focus();
+    } else {
+        custom.style.display = 'none';
+        custom.value = '';
+    }
+}
+
+// Event handler ketika dropdown Quick Add diganti
+function handleQaIPSelect(sel) {
+    const custom = document.getElementById('qaIPCustom');
+    if (sel.value === 'custom') {
+        custom.style.display = 'block';
+        custom.focus();
+    } else {
+        custom.style.display = 'none';
+        custom.value = '';
+    }
+}
+
 async function loadLimiter(){
   try{
     const r=await fetch('/api/limiter');
@@ -951,45 +1051,94 @@ async function loadLimiter(){
       'File: <code>'+esc(d.file||'(none)')+'</code> · '+
       'Rules: <b>'+(d.rules?d.rules.length:0)+'</b>'+
       (d.enabled?'':' · <span style="color:var(--yellow)">limit tidak akan diterapkan sampai enabled=true</span>');
+    
+    // Trigger populate dropdowns
+    loadDevices();
+
     const body=document.getElementById('limiterBody');
     if(!d.rules||d.rules.length===0){
       body.innerHTML='<tr><td colspan="5" class="empty">Belum ada rule. Tambah via form di atas.</td></tr>';
-      return;
+    } else {
+      body.innerHTML=d.rules.map(rule=>{
+        const statusCls=rule.enabled?'badge-on':'badge-off';
+        const statusTxt=rule.enabled?'enabled':'disabled';
+        return '<tr>'+
+          '<td class="mono">'+esc(rule.ip)+'</td>'+
+          '<td class="bytes">'+(rule.up_kbps||0)+'</td>'+
+          '<td class="bytes">'+(rule.down_kbps||0)+'</td>'+
+          '<td><span class="'+statusCls+'">'+statusTxt+'</span></td>'+
+          '<td>'+
+            '<button class="btn-icon edit" onclick="editLimiterRule(\''+esc(rule.ip)+'\','+(rule.up_kbps||0)+','+(rule.down_kbps||0)+','+(rule.enabled?'true':'false')+')" title="Edit">✎</button>'+
+            '<button class="btn-icon danger" onclick="deleteLimiterRule(\''+esc(rule.ip)+'\')" title="Delete">✕</button>'+
+          '</td>'+
+        '</tr>';
+      }).join('');
     }
-    body.innerHTML=d.rules.map(rule=>{
-      const statusCls=rule.enabled?'badge-on':'badge-off';
-      const statusTxt=rule.enabled?'enabled':'disabled';
-      return '<tr>'+
-        '<td class="mono">'+esc(rule.ip)+'</td>'+
-        '<td class="bytes">'+(rule.up_kbps||0)+'</td>'+
-        '<td class="bytes">'+(rule.down_kbps||0)+'</td>'+
-        '<td><span class="'+statusCls+'">'+statusTxt+'</span></td>'+
+
+    // Append Quick Add Row (Kolom Kosong Manual dengan Dropdown)
+    body.innerHTML += 
+      '<tr class="quick-add-row">'+
         '<td>'+
-          '<button class="btn-icon edit" onclick="editLimiterRule(\''+esc(rule.ip)+'\','+(rule.up_kbps||0)+','+(rule.down_kbps||0)+','+(rule.enabled?'true':'false')+')" title="Edit">✎</button>'+
-          '<button class="btn-icon danger" onclick="deleteLimiterRule(\''+esc(rule.ip)+'\')" title="Delete">✕</button>'+
+          '<select id="qaIPSelect" onchange="handleQaIPSelect(this)">'+
+            '<option value="">-- Pilih IP --</option>'+
+          '</select>'+
+          '<input type="text" id="qaIPCustom" placeholder="Ketik IP..." style="display:none; margin-top:4px;">'+
         '</td>'+
+        '<td><input type="number" id="qaUp" placeholder="Up kbps"></td>'+
+        '<td><input type="number" id="qaDown" placeholder="Down kbps"></td>'+
+        '<td><label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="qaEnabled" checked style="margin:0"> On</label></td>'+
+        '<td><button class="btn btn-primary" style="padding:4px 8px;font-size:11px" onclick="quickAddLimiter()">Add</button></td>'+
       '</tr>';
-    }).join('');
+
+    // Setelah menambahkan row Quick Add, panggil ulang populate agar dropdown bawah terisi
+    loadDevices();
+
   }catch(e){console.error(e)}
 }
 
 function editLimiterRule(ip, up, down, enabled){
-  document.getElementById('limIP').value=ip;
+  const sel = document.getElementById('limIPSelect');
+  const custom = document.getElementById('limIPCustom');
+  
+  // Coba cari IP di dropdown
+  let found = false;
+  for (let opt of sel.options) {
+      if (opt.value === ip) { sel.value = ip; found = true; break; }
+  }
+  
+  if (!found) {
+      // Jika tidak ada di list, set ke custom
+      sel.value = 'custom';
+      custom.value = ip;
+      custom.style.display = 'inline-block';
+  } else {
+      custom.style.display = 'none';
+      custom.value = '';
+  }
+  
   document.getElementById('limUp').value=up;
   document.getElementById('limDown').value=down;
   document.getElementById('limEnabled').checked=enabled;
-  document.getElementById('limIP').focus();
+  if (found) sel.focus(); else custom.focus();
 }
 
 function resetLimiterForm(){
-  document.getElementById('limIP').value='';
+  document.getElementById('limIPSelect').value='';
+  const custom = document.getElementById('limIPCustom');
+  custom.value='';
+  custom.style.display='none';
+  
   document.getElementById('limUp').value='';
   document.getElementById('limDown').value='';
   document.getElementById('limEnabled').checked=true;
 }
 
 async function saveLimiterRule(){
-  const ip=document.getElementById('limIP').value.trim();
+  let ip = document.getElementById('limIPSelect').value;
+  if (ip === 'custom') {
+      ip = document.getElementById('limIPCustom').value.trim();
+  }
+  
   if(!ip){toast('IP wajib diisi','warn');return;}
   const up=parseInt(document.getElementById('limUp').value)||0;
   const down=parseInt(document.getElementById('limDown').value)||0;
@@ -1003,6 +1152,29 @@ async function saveLimiterRule(){
     if(!r.ok)throw new Error(await r.text());
     toast('Rule saved: '+ip,'success');
     resetLimiterForm();
+    loadLimiter();
+  }catch(e){toast('Error: '+e.message,'error')}
+}
+
+// Fungsi untuk menyimpan dari baris Quick Add di tabel bawah
+async function quickAddLimiter(){
+  let ip = document.getElementById('qaIPSelect').value;
+  if (ip === 'custom') {
+      ip = document.getElementById('qaIPCustom').value.trim();
+  }
+  
+  if(!ip){toast('IP wajib diisi','warn');return;}
+  const up=parseInt(document.getElementById('qaUp').value)||0;
+  const down=parseInt(document.getElementById('qaDown').value)||0;
+  const enabled=document.getElementById('qaEnabled').checked;
+  try{
+    const r=await fetch('/api/limiter',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ip:ip,up_kbps:up,down_kbps:down,enabled:enabled})
+    });
+    if(!r.ok)throw new Error(await r.text());
+    toast('Quick add: '+ip,'success');
     loadLimiter();
   }catch(e){toast('Error: '+e.message,'error')}
 }
