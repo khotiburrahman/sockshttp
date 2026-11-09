@@ -80,6 +80,7 @@ type Config struct {
 	CustomPayload     string `yaml:"custom_payload"`
 
 	Pinger  int  `yaml:"pinger"`
+ PingerMax  int  `yaml:"pinger_max"`
 	NoDelay bool `yaml:"no_delay"`
 
 	StartupTimeout Duration `yaml:"startup_timeout"`
