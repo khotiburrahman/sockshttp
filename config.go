@@ -79,9 +79,9 @@ type Config struct {
 	UseDefaultPayload bool   `yaml:"use_default_payload"`
 	CustomPayload     string `yaml:"custom_payload"`
 
-	Pinger  int  `yaml:"pinger"`
- PingerMax  int  `yaml:"pinger_max"`
-	NoDelay bool `yaml:"no_delay"`
+	Pinger    int  `yaml:"pinger"`
+	PingerMax int  `yaml:"pinger_max"` // Batas maksimal random ping
+	NoDelay   bool `yaml:"no_delay"`
 
 	StartupTimeout Duration `yaml:"startup_timeout"`
 	ConnRetention  Duration `yaml:"conn_retention"`
@@ -154,7 +154,8 @@ func DefaultConfig() *Config {
 	c := &Config{
 		ServerPort:     22,
 		TunnelType:     "direct",
-		Pinger:         3,
+		Pinger:         5,
+		PingerMax:      30,
 		NoDelay:        true,
 		StartupTimeout: Duration(60 * time.Second),
 		ConnRetention:  Duration(60 * time.Second),
@@ -339,5 +340,9 @@ func LoadSKSConfig(r io.Reader, cfg *Config) error {
 			cfg.ValidityDate = n
 		}
 	}
+	// SKS tidak memiliki konsep pinger acak (PingerMax),
+	// jadi kita samakan nilainya agar tidak error saat parsing.
+	cfg.PingerMax = cfg.Pinger
+
 	return nil
 }
