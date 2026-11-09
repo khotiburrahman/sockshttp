@@ -13,7 +13,8 @@ proxy_port: port
 use_default_payload: false
 custom_payload: "GET / HTTP/1.1[crlf]Host: edu.ruangguru.com[crlf]Connection: Keep-Alive[crlf][crlf]PATCH / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf][crlf][split]HTTP/ 69[crlf][crlf]"
 
-pinger: 2
+pinger: 5
+oinger_max: 15
 no_delay: true
 
 startup_timeout: 60s
