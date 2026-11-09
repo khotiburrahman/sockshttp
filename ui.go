@@ -1,7 +1,7 @@
 package main
 
 const uiHTML = `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -9,6 +9,13 @@ const uiHTML = `<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script>
+  // Set theme ASAP untuk mencegah flash
+  (function(){
+    var t = localStorage.getItem('sockshttp_theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
 <style>
 :root{
   --bg:#080b10;
@@ -38,7 +45,38 @@ const uiHTML = `<!DOCTYPE html>
   --shadow-sm:0 1px 3px rgba(0,0,0,0.4);
   --shadow:0 4px 16px rgba(0,0,0,0.35);
   --shadow-lg:0 12px 32px rgba(0,0,0,0.5);
+  --header-bg:rgba(13,17,23,0.85);
+  --log-bg:#06090d;
   --t:all 0.18s cubic-bezier(0.4,0,0.2,1);
+}
+/* ---------- LIGHT THEME (Susu/Cream) ---------- */
+:root[data-theme="light"]{
+  --bg:#fbf7ee;
+  --bg-elev:#f5efe1;
+  --surface:#ffffff;
+  --surface-hover:#faf6ec;
+  --surface-elev:#f1ead9;
+  --border:#e3dccb;
+  --border-hover:#cdc2aa;
+  --text:#2a2418;
+  --text-muted:#6b634f;
+  --text-subtle:#948b75;
+  --blue:#0969da;
+  --blue-hover:#0550ae;
+  --blue-bg:rgba(9,105,218,0.10);
+  --green:#1a7f37;
+  --green-bg:rgba(26,127,55,0.10);
+  --red:#cf222e;
+  --red-bg:rgba(207,34,46,0.10);
+  --yellow:#9a6700;
+  --yellow-bg:rgba(154,103,0,0.10);
+  --purple:#8250df;
+  --purple-bg:rgba(130,80,223,0.10);
+  --shadow-sm:0 1px 3px rgba(120,100,60,0.08);
+  --shadow:0 4px 16px rgba(120,100,60,0.12);
+  --shadow-lg:0 12px 32px rgba(120,100,60,0.18);
+  --header-bg:rgba(251,247,238,0.85);
+  --log-bg:#f7f2e6;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth}
@@ -47,6 +85,7 @@ body{
   background:var(--bg);color:var(--text);font-size:14px;
   -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
   min-height:100vh; overflow-x: hidden;
+  transition: background 0.2s ease, color 0.2s ease;
 }
 body::before{
   content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
@@ -54,16 +93,20 @@ body::before{
     radial-gradient(ellipse 800px 400px at 20% -10%,rgba(88,166,255,0.06),transparent 60%),
     radial-gradient(ellipse 600px 300px at 80% 0%,rgba(163,113,247,0.04),transparent 60%);
 }
+:root[data-theme="light"] body::before{
+  background:
+    radial-gradient(ellipse 800px 400px at 20% -10%,rgba(9,105,218,0.04),transparent 60%),
+    radial-gradient(ellipse 600px 300px at 80% 0%,rgba(130,80,223,0.03),transparent 60%);
+}
 ::-webkit-scrollbar{width:6px;height:6px}
 ::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:#2d3641;border-radius:3px}
-::-webkit-scrollbar-thumb:hover{background:#3d4754}
+::-webkit-scrollbar-thumb{background:var(--border-hover);border-radius:3px}
 code,pre,.mono{font-family:'JetBrains Mono',ui-monospace,monospace}
 
 /* ---------- HEADER ---------- */
 header{
   position:sticky;top:0;z-index:50;
-  background:rgba(13,17,23,0.85);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  background:var(--header-bg);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
   border-bottom:1px solid var(--border);
   padding:10px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;
 }
@@ -75,7 +118,7 @@ header{
   box-shadow:0 4px 12px rgba(88,166,255,0.3);
 }
 .logo-text{
-  background:linear-gradient(135deg,#e6edf3,#58a6ff);
+  background:linear-gradient(135deg,var(--text),var(--blue));
   -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
 }
 .state-badge{
@@ -84,20 +127,28 @@ header{
   text-transform:uppercase;letter-spacing:0.4px;transition:var(--t);
 }
 .state-dot{width:5px;height:5px;border-radius:50%;background:currentColor;box-shadow:0 0 6px currentColor}
-.state-connected{background:var(--green-bg);color:var(--green);border:1px solid rgba(63,185,80,0.3)}
-.state-connecting{background:var(--yellow-bg);color:var(--yellow);border:1px solid rgba(210,153,34,0.3)}
-.state-disconnected{background:var(--red-bg);color:var(--red);border:1px solid rgba(248,81,73,0.3)}
+.state-connected{background:var(--green-bg);color:var(--green);border:1px solid var(--green)}
+.state-connecting{background:var(--yellow-bg);color:var(--yellow);border:1px solid var(--yellow)}
+.state-disconnected{background:var(--red-bg);color:var(--red);border:1px solid var(--red)}
 .header-info{color:var(--text-muted);font-size:11px;font-family:'JetBrains Mono',monospace; display:none;}
+.header-right{margin-left:auto;display:flex;align-items:center;gap:8px}
 .version-tag{
-  margin-left:auto;font-size:10px;color:var(--text-subtle);
+  font-size:10px;color:var(--text-subtle);
   font-family:'JetBrains Mono',monospace;
   padding:2px 6px;background:var(--surface);border:1px solid var(--border);border-radius:4px;
 }
+.theme-btn{
+  background:var(--surface);border:1px solid var(--border);
+  color:var(--text);padding:4px 10px;border-radius:6px;
+  cursor:pointer;font-size:11px;font-weight:600;font-family:inherit;
+  transition:var(--t);display:flex;align-items:center;gap:4px;
+}
+.theme-btn:hover{background:var(--surface-hover);border-color:var(--border-hover)}
 
 /* ---------- NAV ---------- */
 nav{
   position:sticky;top:48px;z-index:49;
-  background:rgba(13,17,23,0.85);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  background:var(--header-bg);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
   border-bottom:1px solid var(--border);
   padding:4px 16px;display:flex;gap:4px;overflow-x:auto;
 }
@@ -116,7 +167,7 @@ main{padding:12px;max-width:1600px;margin:0 auto;position:relative;z-index:1}
 .tab.active{display:block}
 @keyframes fadeIn{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:translateY(0)}}
 
-/* ---------- STAT CARDS (Compact) ---------- */
+/* ---------- STAT CARDS ---------- */
 .stat{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-bottom:12px}
 .stat-card{
   background:linear-gradient(145deg,var(--surface) 0%,var(--bg-elev) 100%);
@@ -136,15 +187,22 @@ main{padding:12px;max-width:1600px;margin:0 auto;position:relative;z-index:1}
 .stat-value{font-size:15px;font-weight:700;color:var(--text);line-height:1.1;letter-spacing:-0.3px}
 .stat-value.accent{color:var(--card-accent,var(--blue))}
 .stat-value.small{font-size:13px;font-weight:600}
-.stat-sub{color:var(--text-subtle);font-size:9px;margin-top:2px;font-family:'JetBrains Mono',monospace}
+/* SUB lebih jelas (permintaan #1) */
+.stat-sub{
+  color:var(--card-accent,var(--text-muted));
+  opacity:0.85;
+  font-size:10.5px;
+  margin-top:4px;
+  font-family:'JetBrains Mono',monospace;
+  font-weight:500;
+  letter-spacing:-0.1px;
+  line-height:1.3;
+}
 
-/* ---------- PROXY GROUPS (Horizontal Scroll) ---------- */
+/* ---------- PROXY GROUPS ---------- */
 .groups-section{margin-bottom:12px}
 .groups-title{font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px}
-.groups-container{
-  display:flex;flex-direction:row;gap:8px;overflow-x:auto;padding-bottom:4px;
-  scrollbar-width:none;
-}
+.groups-container{display:flex;flex-direction:row;gap:8px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none}
 .groups-container::-webkit-scrollbar{display:none}
 .group-card{
   background:var(--bg-elev);border:1px solid var(--border);
@@ -174,11 +232,8 @@ main{padding:12px;max-width:1600px;margin:0 auto;position:relative;z-index:1}
 #chart{width:100%;height:80px;display:block}
 .chart-range{color:var(--text-subtle);font-size:9px;font-family:'JetBrains Mono',monospace;margin-top:2px;text-align:right}
 
-/* ---------- TABLE WRAP & STICKY ---------- */
-.tbl-wrap{
-  border:1px solid var(--border);border-radius:var(--radius-lg);
-  background:var(--surface);overflow-x:auto;position:relative;
-}
+/* ---------- TABLE ---------- */
+.tbl-wrap{border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--surface);overflow-x:auto;position:relative}
 table{width:100%;border-collapse:separate;border-spacing:0}
 th{
   background:var(--bg-elev);padding:8px 10px;text-align:left;
@@ -191,14 +246,11 @@ td{
   font-size:11px;vertical-align:middle;color:var(--text);background:var(--surface);
 }
 tbody tr:hover td{background:var(--surface-hover)}
-tbody tr.selected td{background:rgba(88,166,255,0.06)}
+tbody tr.selected td{background:var(--blue-bg)}
 tr.closed-row td{opacity:0.55}
-
-/* Sticky First Column (Hanya untuk Connections) */
 .conn-table th.sticky-col, .conn-table td.sticky-col{position:sticky;left:0;z-index:5;border-right:1px solid var(--border)}
 .conn-table th.sticky-col{z-index:15}
 
-/* Sembunyikan kolom tertentu di HP agar tidak perlu digeser */
 @media(max-width:768px){
   .hide-mobile{display:none !important}
   table{min-width:100% !important}
@@ -227,7 +279,7 @@ tr.closed-row td{opacity:0.55}
   padding:5px 8px;font-size:11px;min-width:110px;transition:var(--t);font-family:inherit;
 }
 .filter-bar input:focus,.filter-bar select:focus{
-  outline:none;border-color:var(--blue);box-shadow:0 0 0 2px rgba(88,166,255,0.15);
+  outline:none;border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-bg);
 }
 .filter-bar label{display:flex;align-items:center;gap:4px;color:var(--text-muted);font-size:11px;cursor:pointer;user-select:none}
 input[type=checkbox]{
@@ -251,7 +303,8 @@ input[type=checkbox]:checked::after{
 .btn:hover:not(:disabled){background:var(--surface-hover);border-color:var(--border-hover)}
 .btn:disabled{opacity:0.4;cursor:not-allowed}
 .btn-primary{background:var(--blue);border-color:var(--blue);color:#fff}
-.btn-danger{background:var(--red-bg);border-color:rgba(248,81,73,0.4);color:var(--red)}
+.btn-primary:hover:not(:disabled){background:var(--blue-hover);border-color:var(--blue-hover)}
+.btn-danger{background:var(--red-bg);border-color:var(--red);color:var(--red)}
 .btn-icon{background:transparent;border:none;color:var(--text-muted);cursor:pointer;padding:2px 4px;border-radius:3px;font-size:12px;transition:var(--t)}
 .btn-icon:hover{background:var(--surface-hover);color:var(--text)}
 .btn-icon.danger:hover{background:var(--red-bg);color:var(--red)}
@@ -272,11 +325,11 @@ input[type=checkbox]:checked::after{
 
 /* ---------- LOGS & CONFIG ---------- */
 #logbox{
-  background:#06090d;border:1px solid var(--border);
+  background:var(--log-bg);border:1px solid var(--border);
   border-radius:var(--radius-lg);padding:8px 10px;
-  height:calc(100vh - 180px);overflow-y:auto;
+  height:calc(100vh - 240px);overflow-y:auto;
   font-family:'JetBrains Mono',ui-monospace,monospace;
-  font-size:10px;line-height:1.5;white-space:pre-wrap;word-break:break-all;color:#c9d1d9;
+  font-size:10px;line-height:1.5;white-space:pre-wrap;word-break:break-all;color:var(--text);
 }
 #configBox{
   background:var(--surface);border:1px solid var(--border);
@@ -320,11 +373,17 @@ input[type=checkbox]:checked::after{
 .bytes{color:var(--text-muted);font-size:10px;font-family:'JetBrains Mono',monospace}
 
 /* Quick Add Row di Limiter */
-.quick-add-row td { background: rgba(88,166,255,0.03); padding: 4px 8px; }
-.quick-add-row input, .quick-add-row select { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 3px 6px; border-radius: 3px; font-size: 10px; width: 100%; }
+.quick-add-row td { background: var(--blue-bg); padding: 4px 8px; }
+.quick-add-row input, .quick-add-row select { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 3px 6px; border-radius: 3px; font-size: 10px; width: 100%; font-family:inherit; }
 .quick-add-row input:focus, .quick-add-row select:focus { outline: none; border-color: var(--blue); }
 
-/* Desktop tweak */
+/* Inline edit row */
+.edit-row input[type=number]{
+  background:var(--bg-elev);border:1px solid var(--border);
+  border-radius:3px;color:var(--text);padding:3px 6px;font-size:10px;width:70px;font-family:inherit;
+}
+.edit-row input[type=number]:focus{outline:none;border-color:var(--blue)}
+
 @media(min-width:769px){
   .stat{grid-template-columns:repeat(4,1fr)}
   .header-info{display:inline-block}
@@ -344,7 +403,10 @@ input[type=checkbox]:checked::after{
     <span class="state-dot"></span><span id="stateText">disconnected</span>
   </span>
   <span id="serverInfo" class="header-info"></span>
-  <span id="versionInfo" class="version-tag">v?</span>
+  <div class="header-right">
+    <button id="themeBtn" class="theme-btn" onclick="toggleTheme()">☀ Terang</button>
+    <span id="versionInfo" class="version-tag">v?</span>
+  </div>
 </header>
 
 <nav>
@@ -359,7 +421,6 @@ input[type=checkbox]:checked::after{
 
 <!-- DASHBOARD -->
 <div id="tab-dashboard" class="tab active">
-  
   <div class="stat" id="statsRow"></div>
 
   <div class="groups-section">
@@ -373,8 +434,8 @@ input[type=checkbox]:checked::after{
     <div class="chart-header">
       <span class="chart-title">Live Traffic</span>
       <div class="chart-legend">
-        <span><span class="dot" style="background:var(--green)"></span>Up</span>
-        <span><span class="dot" style="background:var(--blue)"></span>Down</span>
+        <span><span class="dot" style="background:#3fb950"></span>Up</span>
+        <span><span class="dot" style="background:#58a6ff"></span>Down</span>
       </div>
     </div>
     <svg id="chart" viewBox="0 0 600 100" preserveAspectRatio="none">
@@ -455,26 +516,12 @@ input[type=checkbox]:checked::after{
   </div>
 </div>
 
-<!-- LIMITER -->
+<!-- LIMITER (no top form anymore) -->
 <div id="tab-limiter" class="tab">
   <div class="hint">
-    Atur limit kecepatan <b>per IP</b>. Nilai dalam <b>kilobit/detik</b> (0 = unlimited).
+    Kelola limit bandwidth <b>per IP</b>. Gunakan baris <b>Quick-Add</b> di bawah tabel untuk menambah, atau klik <b>✎</b> untuk edit langsung di baris.
   </div>
-
   <div id="limiterInfo" class="hint"></div>
-
-  <div class="filter-bar">
-    <select id="limIPSelect" onchange="handleIPSelect(this)" style="font-weight:600; color:var(--blue); flex:1; min-width:130px">
-      <option value="">-- Pilih IP --</option>
-    </select>
-    <input type="text" id="limIPCustom" placeholder="Ketik IP manual..." style="display:none; flex:1; min-width:130px">
-    
-    <input type="number" id="limUp" placeholder="⬆ Up kbps" min="0" style="width:90px">
-    <input type="number" id="limDown" placeholder="⬇ Down kbps" min="0" style="width:90px">
-    <label><input type="checkbox" id="limEnabled" checked> On</label>
-    <button class="btn btn-primary" onclick="saveLimiterRule()">Save</button>
-    <button class="btn" onclick="resetLimiterForm()">Reset</button>
-  </div>
 
   <div class="tbl-wrap">
     <table>
@@ -483,7 +530,7 @@ input[type=checkbox]:checked::after{
         <th>⬆ Up</th>
         <th>⬇ Down</th>
         <th>Status</th>
-        <th style="width:80px">Action</th>
+        <th style="width:100px">Action</th>
       </tr></thead>
       <tbody id="limiterBody"></tbody>
     </table>
@@ -495,7 +542,9 @@ input[type=checkbox]:checked::after{
   <div class="filter-bar">
     <label><input type="checkbox" id="pauseLog" onchange="updatePauseLog()"> Pause</label>
     <input type="text" id="logSearch" placeholder="Search log..." oninput="filterLog()" style="flex:1;min-width:100px">
-    <button class="btn" onclick="document.getElementById('logbox').textContent=''">Clear</button>
+    <input type="number" id="logMaxLines" placeholder="Max lines" min="100" style="width:90px" title="Batas baris maksimum di layar">
+    <input type="number" id="logClearMin" placeholder="Auto-clear (mnt)" min="0" style="width:110px" title="0 = tidak pernah clear otomatis">
+    <button class="btn" onclick="document.getElementById('logbox').textContent='';logBuffer=''">Clear</button>
   </div>
   <div id="logbox">Connecting to log stream...</div>
 </div>
@@ -510,6 +559,26 @@ input[type=checkbox]:checked::after{
 <div id="toastContainer"></div>
 
 <script>
+// ============ THEME ============
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme') || 'dark';
+  const next = cur === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('sockshttp_theme', next);
+  updateThemeBtn(next);
+}
+function updateThemeBtn(t) {
+  const btn = document.getElementById('themeBtn');
+  if (btn) {
+    btn.textContent = t === 'dark' ? '☀ Terang' : '🌙 Gelap';
+  }
+}
+function initTheme() {
+  const t = localStorage.getItem('sockshttp_theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', t);
+  updateThemeBtn(t);
+}
+
 // ============ utils ============
 function esc(s){
   if(s==null)return '';
@@ -538,17 +607,14 @@ function fmtUptime(sec){
   if (h > 0) return h + 'h ' + m + 'm';
   return m + 'm';
 }
-// Format waktu lalu
 function timeAgo(unixTs){
   if(!unixTs || unixTs <= 0) return 'belum pernah';
   const now = Math.floor(Date.now() / 1000);
   const diff = now - unixTs;
   if (diff < 0) return 'baru saja';
   if (diff < 60) return diff + ' detik lalu';
-  
   const m = Math.floor(diff / 60);
   if (m < 60) return m + ' menit lalu';
-  
   const h = Math.floor(m / 60);
   const rm = m % 60;
   if (h > 24) {
@@ -557,7 +623,6 @@ function timeAgo(unixTs){
   }
   return h + 'j ' + rm + 'm lalu';
 }
-
 function toast(msg,type){
   type=type||'info';
   const c=document.getElementById('toastContainer');
@@ -592,12 +657,10 @@ async function loadStatus(){
     const state=d.state||'disconnected';
     badge.className='state-badge state-'+state;
     document.getElementById('stateText').textContent=state;
-    document.getElementById('serverInfo').innerHTML='<span class="hl">'+esc(d.server||'')+'</span>';
+    document.getElementById('serverInfo').innerHTML='<span style="color:var(--text);font-weight:500">'+esc(d.server||'')+'</span>';
     document.getElementById('versionInfo').textContent='v'+(d.version||'?');
 
     const stateColor=state==='connected'?'var(--green)':(state==='connecting'?'var(--yellow)':'var(--red)');
-    
-    // Menampilkan waktu reconnect terakhir
     const reconnectSub = d.reconnects > 0 ? timeAgo(d.last_reconnect) : '';
 
     document.getElementById('statsRow').innerHTML=
@@ -608,7 +671,7 @@ async function loadStatus(){
       card('⇄','Active',d.active_conns||0,'')+
       card('✓','Closed',d.closed_conns||0,'')+
       card('↻','Reconnects',d.reconnects||0,'small','var(--purple)', reconnectSub)+
-      card('◇','DNS',d.dns_queries||0,'small','var(--purple)','pool '+(d.dns_pool?d.dns_pool.size:0));
+      card('◇','DNS',d.dns_queries||0,'small','var(--purple)','pool: '+(d.dns_pool?d.dns_pool.size:0));
   }catch(e){console.error(e)}
 }
 function card(icon,label,value,extra,accent,sub){
@@ -851,12 +914,10 @@ async function loadConfigData() {
 }
 
 async function populateIPDropdowns(activeDevices) {
-    const selectTop = document.getElementById('limIPSelect');
-    const selectBottom = document.getElementById('qaIPSelect');
+    const sel = document.getElementById('qaIPSelect');
+    if (!sel) return;
     let ips = new Set();
-    
     if (activeDevices) { activeDevices.forEach(d => ips.add(d.srcIP)); }
-    
     const cfg = await loadConfigData();
     if (cfg && cfg.rules) {
         cfg.rules.forEach(rule => {
@@ -867,24 +928,15 @@ async function populateIPDropdowns(activeDevices) {
         });
     }
     try { const r = await fetch('/api/limiter'); const d = await r.json(); if (d.rules) d.rules.forEach(x => ips.add(x.ip)); } catch(e) {}
-
     const sortedIPs = Array.from(ips).sort();
-    const curTopVal = selectTop.value;
-    const curBottomVal = selectBottom ? selectBottom.value : '';
-
+    const cur = sel.value;
     let opts = '<option value="">-- Pilih IP --</option>';
     sortedIPs.forEach(ip => { opts += '<option value="'+ip+'">'+ip+'</option>'; });
     opts += '<option value="custom" style="color:var(--yellow);font-weight:bold">-- custom --</option>';
-    
-    if (selectTop) { selectTop.innerHTML = opts; if (sortedIPs.includes(curTopVal)) selectTop.value = curTopVal; }
-    if (selectBottom) { selectBottom.innerHTML = opts; if (sortedIPs.includes(curBottomVal)) selectBottom.value = curBottomVal; }
+    sel.innerHTML = opts;
+    if (sortedIPs.includes(cur)) sel.value = cur;
 }
 
-function handleIPSelect(sel) {
-    const custom = document.getElementById('limIPCustom');
-    if (sel.value === 'custom') { custom.style.display = 'inline-block'; custom.focus(); }
-    else { custom.style.display = 'none'; custom.value = ''; }
-}
 function handleQaIPSelect(sel) {
     const custom = document.getElementById('qaIPCustom');
     if (sel.value === 'custom') { custom.style.display = 'block'; custom.focus(); }
@@ -895,31 +947,29 @@ async function loadLimiter(){
   try{
     const r=await fetch('/api/limiter');
     const d=await r.json();
-    document.getElementById('limiterInfo').innerHTML='Status: <b style="color:'+(d.enabled?'var(--green)':'var(--red)')+'">'+(d.enabled?'✅ enabled':'⛔ disabled')+'</b> · Rules: <b>'+(d.rules?d.rules.length:0)+'</b>';
+    document.getElementById('limiterInfo').innerHTML='Status: <b style="color:'+(d.enabled?'var(--green)':'var(--red)')+'">'+(d.enabled?'✅ enabled':'⛔ disabled')+'</b> · File: <code>'+esc(d.file||'(none)')+'</code> · Rules: <b>'+(d.rules?d.rules.length:0)+'</b>';
     
-    loadDevices();
     const body=document.getElementById('limiterBody');
-    
+    let html='';
     if(!d.rules||d.rules.length===0){
-      body.innerHTML='<tr><td colspan="5" class="empty">Belum ada rule.</td></tr>';
+      html='<tr><td colspan="5" class="empty">Belum ada rule. Tambahkan lewat baris di bawah.</td></tr>';
     } else {
-      body.innerHTML=d.rules.map(rule=>{
+      html = d.rules.map(rule=>{
         const statusCls=rule.enabled?'badge-on':'badge-off'; const statusTxt=rule.enabled?'on':'off';
-        return '<tr>'+
+        return '<tr id="rule-'+esc(rule.ip)+'">'+
           '<td class="mono">'+esc(rule.ip)+'</td>'+
           '<td class="bytes">'+(rule.up_kbps||0)+'</td>'+
           '<td class="bytes">'+(rule.down_kbps||0)+'</td>'+
           '<td><span class="'+statusCls+'">'+statusTxt+'</span></td>'+
           '<td>'+
-            '<button class="btn-icon edit" onclick="editLimiterRule(\''+esc(rule.ip)+'\','+(rule.up_kbps||0)+','+(rule.down_kbps||0)+','+(rule.enabled?'true':'false')+')">✎</button>'+
-            '<button class="btn-icon danger" onclick="deleteLimiterRule(\''+esc(rule.ip)+'\')">✕</button>'+
+            '<button class="btn-icon edit" onclick="editRow(\''+esc(rule.ip)+'\','+(rule.up_kbps||0)+','+(rule.down_kbps||0)+','+(rule.enabled?'true':'false')+')" title="Edit">✎</button>'+
+            '<button class="btn-icon danger" onclick="deleteLimiterRule(\''+esc(rule.ip)+'\')" title="Delete">✕</button>'+
           '</td>'+
         '</tr>';
       }).join('');
     }
-
-    body.innerHTML += 
-      '<tr class="quick-add-row">'+
+    // Quick add row
+    html += '<tr class="quick-add-row">'+
         '<td>'+
           '<select id="qaIPSelect" onchange="handleQaIPSelect(this)"><option value="">-- Pilih IP --</option></select>'+
           '<input type="text" id="qaIPCustom" placeholder="Ketik IP..." style="display:none; margin-top:2px;">'+
@@ -930,36 +980,39 @@ async function loadLimiter(){
         '<td><button class="btn btn-primary" style="padding:3px 6px;font-size:10px" onclick="quickAddLimiter()">Add</button></td>'+
       '</tr>';
 
-    loadDevices();
+    body.innerHTML = html;
+    loadDevices(); // to populate dropdown
   }catch(e){console.error(e)}
 }
 
-function editLimiterRule(ip, up, down, enabled){
-  const sel = document.getElementById('limIPSelect');
-  const custom = document.getElementById('limIPCustom');
-  let found = false;
-  for (let opt of sel.options) { if (opt.value === ip) { sel.value = ip; found = true; break; } }
-  if (!found) { sel.value = 'custom'; custom.value = ip; custom.style.display = 'inline-block'; } else { custom.style.display = 'none'; custom.value = ''; }
-  document.getElementById('limUp').value=up; document.getElementById('limDown').value=down; document.getElementById('limEnabled').checked=enabled;
-}
-function resetLimiterForm(){
-  document.getElementById('limIPSelect').value=''; const custom = document.getElementById('limIPCustom'); custom.value=''; custom.style.display='none';
-  document.getElementById('limUp').value=''; document.getElementById('limDown').value=''; document.getElementById('limEnabled').checked=true;
+// Inline edit — klik ✎ mengubah baris menjadi input
+function editRow(ip, up, down, enabled){
+  const row = document.getElementById('rule-'+ip);
+  if (!row) return;
+  row.className = 'edit-row';
+  row.innerHTML =
+    '<td class="mono">'+esc(ip)+'</td>'+
+    '<td><input type="number" id="eUp_'+ip+'" value="'+up+'"></td>'+
+    '<td><input type="number" id="eDown_'+ip+'" value="'+down+'"></td>'+
+    '<td><label style="display:flex;align-items:center;gap:2px;cursor:pointer"><input type="checkbox" id="eEnabled_'+ip+'" '+(enabled?'checked':'')+' style="margin:0"> On</label></td>'+
+    '<td>'+
+      '<button class="btn-icon" onclick="saveRow(\''+esc(ip)+'\')" title="Save" style="color:var(--green);font-weight:700">✓</button>'+
+      '<button class="btn-icon" onclick="loadLimiter()" title="Cancel">✕</button>'+
+    '</td>';
+  document.getElementById('eUp_'+ip).focus();
 }
 
-async function saveLimiterRule(){
-  let ip = document.getElementById('limIPSelect').value;
-  if (ip === 'custom') { ip = document.getElementById('limIPCustom').value.trim(); }
-  if(!ip){toast('IP kosong','warn');return;}
-  const up=parseInt(document.getElementById('limUp').value)||0;
-  const down=parseInt(document.getElementById('limDown').value)||0;
-  const enabled=document.getElementById('limEnabled').checked;
+async function saveRow(ip){
+  const up = parseInt(document.getElementById('eUp_'+ip).value)||0;
+  const down = parseInt(document.getElementById('eDown_'+ip).value)||0;
+  const enabled = document.getElementById('eEnabled_'+ip).checked;
   try{
     const r=await fetch('/api/limiter',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:ip,up_kbps:up,down_kbps:down,enabled:enabled})});
     if(!r.ok)throw new Error(await r.text());
-    toast('Saved: '+ip,'success'); resetLimiterForm(); loadLimiter();
+    toast('Updated: '+ip,'success'); loadLimiter();
   }catch(e){toast('Err: '+e.message,'error')}
 }
+
 async function quickAddLimiter(){
   let ip = document.getElementById('qaIPSelect').value;
   if (ip === 'custom') { ip = document.getElementById('qaIPCustom').value.trim(); }
@@ -973,6 +1026,7 @@ async function quickAddLimiter(){
     toast('Added: '+ip,'success'); loadLimiter();
   }catch(e){toast('Err: '+e.message,'error')}
 }
+
 async function deleteLimiterRule(ip){
   if(!confirm('Hapus rule '+ip+'?'))return;
   try{ await fetch('/api/limiter/'+encodeURIComponent(ip),{method:'DELETE'}); toast('Deleted','success'); loadLimiter(); }
@@ -980,7 +1034,53 @@ async function deleteLimiterRule(ip){
 }
 
 // ============ logs ============
-let logSource=null; let logPaused=false; let logBuffer='';
+let logSource=null;
+let logPaused=false;
+let logBuffer='';
+let logMaxLines = parseInt(localStorage.getItem('sockshttp_logMaxLines')) || 2000;
+let logClearMin = parseInt(localStorage.getItem('sockshttp_logClearMin')) || 0;
+let logClearTimer = null;
+
+function initLogSettings() {
+  const el1 = document.getElementById('logMaxLines');
+  const el2 = document.getElementById('logClearMin');
+  if (el1) el1.value = logMaxLines;
+  if (el2) el2.value = logClearMin;
+  scheduleLogClear();
+}
+
+function applyLogSettings() {
+  const m = parseInt(document.getElementById('logMaxLines').value);
+  const c = parseInt(document.getElementById('logClearMin').value);
+  logMaxLines = (isNaN(m) || m < 100) ? 2000 : m;
+  logClearMin = (isNaN(c) || c < 0) ? 0 : c;
+  localStorage.setItem('sockshttp_logMaxLines', logMaxLines);
+  localStorage.setItem('sockshttp_logClearMin', logClearMin);
+  trimLogBuffer();
+  scheduleLogClear();
+  renderLog();
+  toast('Log settings saved (max '+logMaxLines+' lines, clear '+logClearMin+'min)', 'success');
+}
+
+function trimLogBuffer() {
+  if (!logBuffer) return;
+  const lines = logBuffer.split('\n');
+  if (lines.length > logMaxLines) {
+    logBuffer = lines.slice(-logMaxLines).join('\n');
+  }
+}
+
+function scheduleLogClear() {
+  if (logClearTimer) clearTimeout(logClearTimer);
+  if (logClearMin > 0) {
+    logClearTimer = setTimeout(() => {
+      logBuffer = '';
+      renderLog();
+      scheduleLogClear();
+    }, logClearMin * 60000);
+  }
+}
+
 function connectLogs(){
   if(logSource){logSource.close()}
   const box=document.getElementById('logbox'); logBuffer=''; box.textContent='';
@@ -990,7 +1090,12 @@ function connectLogs(){
       reader.read().then(res=>{
         if(res.done){setTimeout(connectLogs,2000);return}
         logBuffer+=dec.decode(res.value);
-        if(logBuffer.length>500000)logBuffer=logBuffer.slice(-400000);
+        if(logMaxLines > 0){
+          const lines = logBuffer.split('\n');
+          if (lines.length > logMaxLines) {
+            logBuffer = lines.slice(-logMaxLines).join('\n');
+          }
+        }
         if(!logPaused)renderLog(); read();
       });
     } read();
@@ -1012,7 +1117,12 @@ async function loadConfig(){
 }
 
 // ============ bootstrap ============
-setInterval(loadStatus,1000); setInterval(loadTraffic,2000); setInterval(loadDevices,3000); setInterval(loadProxies,5000);
+initTheme();
+initLogSettings();
+setInterval(loadStatus,1000);
+setInterval(loadTraffic,2000);
+setInterval(loadDevices,3000);
+setInterval(loadProxies,5000);
 setInterval(()=>{if(connState==='active' || document.getElementById('tab-connections').classList.contains('active'))loadConnections();},1000);
 loadStatus(); loadTraffic(); loadDevices(); loadProxies(); loadLimiter();
 </script>
