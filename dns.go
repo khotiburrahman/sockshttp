@@ -16,8 +16,6 @@ import (
 	"time"
 )
 
-// fakeIPSnapshot adalah format on-disk. Version disimpan untuk migrasi
-// format di masa depan kalau struktur berubah.
 type fakeIPSnapshot struct {
 	Version int         `json:"version"`
 	NextIP  uint32      `json:"next_ip"`
@@ -48,14 +46,11 @@ func NewFakeIPPool() *FakeIPPool {
 	}
 }
 
-// Load membaca snapshot dari path. Tidak error kalau file belum ada (first run).
-// Error hanya kalau file ada tapi corrupt / tidak bisa dibaca.
 func (p *FakeIPPool) Load(path string) error {
 	p.filePath = path
-
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
-		return nil // first run
+		return nil
 	}
 	if err != nil {
 		return err
@@ -78,22 +73,17 @@ func (p *FakeIPPool) Load(path string) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
 	p.domain2IP = make(map[string]string, len(snap.Entries))
 	p.ip2domain = make(map[string]string, len(snap.Entries))
 	p.order = p.order[:0]
-
 	for _, e := range snap.Entries {
 		if len(e) != 2 || e[0] == "" || e[1] == "" {
 			continue
 		}
-		d, ip := e[0], e[1]
-		p.domain2IP[d] = ip
-		p.ip2domain[ip] = d
-		p.order = append(p.order, d)
+		p.domain2IP[e[0]] = e[1]
+		p.ip2domain[e[1]] = e[0]
+		p.order = append(p.order, e[0])
 	}
-
-	// Recover nextIP kalau rusak / di luar range 198.18.x.x
 	p.nextIP = snap.NextIP
 	if (p.nextIP>>24)&0xFF != 198 || (p.nextIP>>16)&0xFF != 18 || p.nextIP == 0 {
 		p.nextIP = (198 << 24) | (18 << 16) | 1
@@ -105,23 +95,14 @@ func (p *FakeIPPool) Load(path string) error {
 				}
 			}
 		}
-		if (p.nextIP>>24)&0xFF != 198 || (p.nextIP>>16)&0xFF != 18 {
-			p.nextIP = (198 << 24) | (18 << 16) | 1
-		}
 	}
-
 	return nil
 }
 
-// Save menulis snapshot atomik ke p.filePath via .tmp + rename.
-// Return nil kalau filePath kosong (persist disabled).
-// Reset dirty flag hanya saat sukses.
 func (p *FakeIPPool) Save() error {
 	if p.filePath == "" {
 		return nil
 	}
-
-	// Snapshot di bawah lock, tulis di luar lock
 	p.mu.Lock()
 	snap := fakeIPSnapshot{
 		Version: 1,
@@ -163,13 +144,10 @@ func (p *FakeIPPool) Save() error {
 		os.Remove(tmp)
 		return fmt.Errorf("rename: %w", err)
 	}
-
 	p.dirty.Store(false)
 	return nil
 }
 
-// DirtyLoop menyimpan snapshot periodik tiap 10 menit kalau ada perubahan.
-// Final save saat shutdown dilakukan di main.go.
 func (p *FakeIPPool) DirtyLoop(ctx context.Context, logger *Logger) {
 	if p.filePath == "" {
 		return
@@ -184,9 +162,6 @@ func (p *FakeIPPool) DirtyLoop(ctx context.Context, logger *Logger) {
 			if p.dirty.Load() {
 				if err := p.Save(); err != nil {
 					logger.Warn("fake-IP periodic save: %v", err)
-					// dirty tetap true, akan retry tick berikutnya
-				} else {
-					logger.Debug("fake-IP periodic save OK")
 				}
 			}
 		}
@@ -256,6 +231,59 @@ func (p *FakeIPPool) Stats() map[string]int64 {
 	}
 }
 
+// ============================================================
+// DNS Forward Cache (untuk mode forward, hindari query berulang)
+// ============================================================
+type cachedDNS struct {
+	resp   []byte
+	expire time.Time
+}
+
+type dnsForwardCache struct {
+	mu   sync.Mutex
+	data map[string]cachedDNS
+}
+
+func newDNSForwardCache() *dnsForwardCache {
+	return &dnsForwardCache{data: map[string]cachedDNS{}}
+}
+
+func (c *dnsForwardCache) Get(key string) ([]byte, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.data[key]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(e.expire) {
+		delete(c.data, key)
+		return nil, false
+	}
+	out := make([]byte, len(e.resp))
+	copy(out, e.resp)
+	return out, true
+}
+
+func (c *dnsForwardCache) Set(key string, resp []byte, ttl time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.data[key] = cachedDNS{
+		resp:   append([]byte(nil), resp...),
+		expire: time.Now().Add(ttl),
+	}
+	if len(c.data) > 2000 {
+		for k := range c.data {
+			delete(c.data, k)
+			if len(c.data) < 1000 {
+				break
+			}
+		}
+	}
+}
+
+// ============================================================
+// DNSServer
+// ============================================================
 type DNSServer struct {
 	cfg     *Config
 	logger  *Logger
@@ -267,10 +295,17 @@ type DNSServer struct {
 	wg      sync.WaitGroup
 	queries atomic.Int64
 	errors  atomic.Int64
+	fwdCache *dnsForwardCache
 }
 
 func NewDNSServer(cfg *Config, logger *Logger, pool *FakeIPPool, tunnel *SSHTunnel) *DNSServer {
-	return &DNSServer{cfg: cfg, logger: logger, pool: pool, tunnel: tunnel}
+	return &DNSServer{
+		cfg:      cfg,
+		logger:   logger,
+		pool:     pool,
+		tunnel:   tunnel,
+		fwdCache: newDNSForwardCache(),
+	}
 }
 
 func (d *DNSServer) Start() error {
@@ -286,7 +321,11 @@ func (d *DNSServer) Start() error {
 	}
 	d.udpConn = udp
 	d.tcpLn = tcp
-	d.logger.Info("Fake-IP DNS listen di %s", d.cfg.DNS.Bind)
+	mode := d.cfg.DNS.Mode
+	if mode == "" {
+		mode = "fakeip"
+	}
+	d.logger.Info("DNS listen di %s (mode: %s)", d.cfg.DNS.Bind, mode)
 	d.wg.Add(2)
 	go d.serveUDP()
 	go d.serveTCP()
@@ -377,14 +416,95 @@ func (d *DNSServer) handleQuery(q []byte) []byte {
 	questionEnd := pos
 	domain := strings.Join(labels, ".")
 
+	mode := d.cfg.DNS.Mode
+	if mode == "" {
+		mode = "fakeip"
+	}
+
+	// --- MODE FORWARD (DNS over TCP via tunnel) ---
+	if mode == "forward" {
+		return d.forwardQuery(q, questionEnd, domain, qtype, qclass)
+	}
+
+	// --- MODE FAKE-IP (default, existing) ---
 	if qtype != 1 || qclass != 1 {
 		return d.buildEmptyResponse(q, questionEnd, 0)
 	}
-
 	fakeIP := d.pool.Assign(domain)
 	ip := net.ParseIP(fakeIP).To4()
 	d.logger.Debug("DNS: %s → %s", domain, fakeIP)
 	return d.buildAResponse(q, questionEnd, ip)
+}
+
+// forwardQuery meneruskan query ke upstream DNS via SSH Tunnel (TCP port 53).
+func (d *DNSServer) forwardQuery(q []byte, questionEnd int, domain string, qtype, qclass uint16) []byte {
+	// Cek Cache
+	cacheKey := fmt.Sprintf("%s|%d|%d", strings.ToLower(domain), qtype, qclass)
+	if cached, ok := d.fwdCache.Get(cacheKey); ok {
+		// Patch ID agar cocok dengan query saat ini
+		if len(cached) >= 2 {
+			cached[0] = q[0]
+			cached[1] = q[1]
+		}
+		return cached
+	}
+
+	// Pastikan tunnel aktif
+	if d.tunnel == nil || d.tunnel.State() != "connected" {
+		d.logger.Debug("DNS forward: tunnel belum siap, skip %s", domain)
+		d.errors.Add(1)
+		return d.buildEmptyResponse(q, questionEnd, 2) // SERVFAIL
+	}
+
+	// Buat koneksi TCP DNS ke upstream via tunnel
+	conn, err := d.tunnel.Dial("tcp", d.cfg.DNS.Upstream)
+	if err != nil {
+		d.logger.Warn("DNS forward dial ke %s gagal: %v", d.cfg.DNS.Upstream, err)
+		d.errors.Add(1)
+		return d.buildEmptyResponse(q, questionEnd, 2)
+	}
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	// Kirim query (2-byte length + payload)
+	msg := make([]byte, 2+len(q))
+	msg[0] = byte(len(q) >> 8)
+	msg[1] = byte(len(q))
+	copy(msg[2:], q)
+	if _, err := conn.Write(msg); err != nil {
+		d.logger.Warn("DNS forward write gagal: %v", err)
+		d.errors.Add(1)
+		return d.buildEmptyResponse(q, questionEnd, 2)
+	}
+
+	// Baca response (2-byte length + payload)
+	lenBuf := make([]byte, 2)
+	if _, err := io.ReadFull(conn, lenBuf); err != nil {
+		d.logger.Warn("DNS forward read len gagal: %v", err)
+		d.errors.Add(1)
+		return d.buildEmptyResponse(q, questionEnd, 2)
+	}
+	respLen := int(lenBuf[0])<<8 | int(lenBuf[1])
+	if respLen == 0 || respLen > 8192 {
+		d.errors.Add(1)
+		return d.buildEmptyResponse(q, questionEnd, 2)
+	}
+	resp := make([]byte, respLen)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		d.logger.Warn("DNS forward read body gagal: %v", err)
+		d.errors.Add(1)
+		return d.buildEmptyResponse(q, questionEnd, 2)
+	}
+
+	d.logger.Debug("DNS forward: %s → %d bytes", domain, respLen)
+
+	// Cache 5 menit untuk respons sukses
+	if len(resp) >= 4 && (resp[3]&0x0F) == 0 {
+		d.fwdCache.Set(cacheKey, resp, 5*time.Minute)
+	}
+
+	return resp
 }
 
 func (d *DNSServer) buildAResponse(q []byte, questionEnd int, ip net.IP) []byte {
