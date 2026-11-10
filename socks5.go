@@ -15,20 +15,18 @@ type SOCKS5Server struct {
 	logger   *Logger
 	tunnel   *SSHTunnel
 	proxyMgr *ProxyManager
-	pool     *FakeIPPool
 	tracker  *ConnTracker
 	ln       net.Listener
 	closed   atomic.Bool
 	wg       sync.WaitGroup
 }
 
-func NewSOCKS5Server(cfg *Config, logger *Logger, tunnel *SSHTunnel, pm *ProxyManager, pool *FakeIPPool, tracker *ConnTracker) *SOCKS5Server {
+func NewSOCKS5Server(cfg *Config, logger *Logger, tunnel *SSHTunnel, pm *ProxyManager, tracker *ConnTracker) *SOCKS5Server {
 	return &SOCKS5Server{
 		cfg:      cfg,
 		logger:   logger,
 		tunnel:   tunnel,
 		proxyMgr: pm,
-		pool:     pool,
 		tracker:  tracker,
 	}
 }
@@ -119,19 +117,9 @@ func (s *SOCKS5Server) handleConn(c net.Conn) {
 	}
 	port := int(binary.BigEndian.Uint16(pb))
 
-	originalHost := host
-	if s.pool != nil && s.pool.IsFake(host) {
-		if d, ok := s.pool.LookupDomain(host); ok {
-			s.logger.Debug("SOCKS5 fake-IP %s -> domain %s", host, d)
-			host = d
-		}
-	}
-
-	// Catatan: SOCKS5 selalu resolve via group DEFAULT.
-	// Rule SRC-IP-CIDR tidak berlaku di sini — rule tersebut hanya
-	// untuk traffic REDIRECT (router) karena butuh src IP asli client.
-	// SOCKS5 client yang connect langsung ke router akan terlihat
-	// sebagai "127.0.0.1" atau IP interface, bukan IP device.
+	// SOCKS5 selalu resolve via group DEFAULT.
+	// Rule SRC-IP-CIDR tidak berlaku di sini — hanya untuk traffic REDIRECT
+	// dari router karena butuh src IP asli client.
 	target, chain := s.proxyMgr.Resolve("DEFAULT")
 	s.logger.Debug("SOCKS5 %s:%d -> %s (%s)", host, port, target, chain)
 
@@ -154,7 +142,7 @@ func (s *SOCKS5Server) handleConn(c net.Conn) {
 	}
 
 	if err != nil {
-		s.logger.Debug("SOCKS5 dial %s (asli: %s) gagal: %v", dest, originalHost, err)
+		s.logger.Debug("SOCKS5 dial %s gagal: %v", dest, err)
 		c.Write([]byte{0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		return
 	}
@@ -163,10 +151,6 @@ func (s *SOCKS5Server) handleConn(c net.Conn) {
 	c.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 	c.SetDeadline(time.Time{})
 
-	// Pipe dua arah dengan penghitung byte global.
-	// Statistik per-koneksi (di dashboard) tidak dibuat di sini karena
-	// SOCKS5 dipakai untuk client manual, bukan traffic device — kalau
-	// nanti perlu per-conn view, tinggal panggil s.tracker.New() di atas.
 	done := make(chan struct{}, 2)
 	go func() {
 		cw := &countingWriter{w: remote, global: &s.tracker.TotalUp}
@@ -186,8 +170,6 @@ func (s *SOCKS5Server) handleConn(c net.Conn) {
 	}()
 
 	<-done
-	// Paksa kedua arah berhenti agar goroutine satunya tidak menggantung
-	// kalau peer tidak mengirim FIN setelah CloseWrite.
 	c.Close()
 	remote.Close()
 	<-done
