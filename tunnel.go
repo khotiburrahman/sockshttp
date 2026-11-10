@@ -19,11 +19,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// Timeout untuk Dial channel setelah tunnel aktif.
-// Diturunkan dari 15s → 5s agar HP retry lebih cepat saat tunnel mati.
 const tunnelDialTimeout = 5 * time.Second
-
-// Timeout per-attempt untuk warmup dial saat handshake baru selesai.
 const warmupDialTimeout = 3 * time.Second
 
 type monitoredConn struct {
@@ -53,7 +49,6 @@ func (c *monitoredConn) Close() error {
 	return c.Conn.Close()
 }
 
-// dialSSHWithTimeout membungkus ssh.Client.Dial dengan timeout.
 func dialSSHWithTimeout(client *ssh.Client, network, addr string, timeout time.Duration) (net.Conn, error) {
 	type result struct {
 		conn net.Conn
@@ -91,9 +86,12 @@ type SSHTunnel struct {
 	state         atomic.Value
 	disconCh      chan error
 	reconnect     atomic.Int64
-	lastReconnect atomic.Int64 // Menyimpan Unix timestamp reconnect terakhir
+	lastReconnect atomic.Int64
 	lastErr       atomic.Value
 	connected     atomic.Bool
+
+	reconnMu         sync.Mutex
+	reconnectHistory []int64
 }
 
 func NewSSHTunnel(cfg *Config, logger *Logger) *SSHTunnel {
@@ -152,13 +150,57 @@ func (t *SSHTunnel) buildAuth() ([]ssh.AuthMethod, error) {
 	return auths, nil
 }
 
-// openRawConn membuka koneksi mentah (termasuk HTTP proxy / Custom Payload)
+// resolveHost dengan strategi multi-stage (DNS Sistem -> DNS Publik -> IP Fallback)
+func (t *SSHTunnel) resolveHost(hostname string) []string {
+	if net.ParseIP(hostname) != nil {
+		return []string{hostname}
+	}
+
+	// 1. Coba DNS Sistem (ISP)
+	t.logger.Debug("[resolve] Mencoba DNS Sistem untuk %s...", hostname)
+	ips, err := net.LookupHost(hostname)
+	if err == nil && len(ips) > 0 {
+		t.logger.Debug("[resolve] Berhasil via DNS Sistem: %v", ips)
+		return ips
+	}
+
+	// 2. Coba DNS Publik (1.1.1.1)
+	t.logger.Debug("[resolve] DNS Sistem gagal, mencoba via 1.1.1.1...")
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 3 * time.Second}
+			return d.DialContext(ctx, "udp", "1.1.1.1:53")
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	ips, err = resolver.LookupHost(ctx, hostname)
+	if err == nil && len(ips) > 0 {
+		t.logger.Debug("[resolve] Berhasil via 1.1.1.1: %v", ips)
+		return ips
+	}
+
+	// 3. Fallback IP (jika didaftarkan di YAML)
+	t.logger.Warn("[resolve] Semua DNS gagal untuk %s", hostname)
+	if len(t.cfg.ProxyHostFallback) > 0 {
+		t.logger.Warn("[resolve] Menggunakan IP Fallback Darurat: %v", t.cfg.ProxyHostFallback)
+		return t.cfg.ProxyHostFallback
+	}
+
+	return []string{hostname}
+}
+
+// openRawConn membuka koneksi mentah dan mencoba setiap IP jika gagal (Failover)
 func (t *SSHTunnel) openRawConn() (net.Conn, error) {
-	var dialAddr, payload string
-	readResponse := false
+	var payload string
+	var readResponse bool
+	var targetHost string
+	var targetPort int
 
 	if t.cfg.TunnelType == "proxy" {
-		dialAddr = net.JoinHostPort(t.cfg.ProxyHost, strconv.Itoa(t.cfg.ProxyPort))
+		targetHost = t.cfg.ProxyHost
+		targetPort = t.cfg.ProxyPort
 		if t.cfg.UseDefaultPayload {
 			payload = fmt.Sprintf("CONNECT %s:%d HTTP/1.0\r\n\r\n", t.cfg.Server, t.cfg.ServerPort)
 		} else {
@@ -166,16 +208,33 @@ func (t *SSHTunnel) openRawConn() (net.Conn, error) {
 		}
 		readResponse = true
 	} else {
-		dialAddr = net.JoinHostPort(t.cfg.Server, strconv.Itoa(t.cfg.ServerPort))
+		targetHost = t.cfg.Server
+		targetPort = t.cfg.ServerPort
 		if !t.cfg.UseDefaultPayload {
 			payload = formatPayload(t.cfg.Server, t.cfg.ServerPort, t.cfg.CustomPayload)
 		}
 	}
 
-	conn, err := net.DialTimeout("tcp", dialAddr, 15*time.Second)
-	if err != nil {
-		return nil, err
+	ips := t.resolveHost(targetHost)
+	var conn net.Conn
+	var lastErr error
+
+	for _, ip := range ips {
+		dialAddr := net.JoinHostPort(ip, strconv.Itoa(targetPort))
+		t.logger.Debug("[tunnel] Mencoba dial ke %s...", dialAddr)
+		
+		conn, lastErr = net.DialTimeout("tcp", dialAddr, 10*time.Second)
+		if lastErr == nil {
+			t.logger.Debug("[tunnel] Berhasil terhubung ke %s", dialAddr)
+			break
+		}
+		t.logger.Warn("[tunnel] Gagal dial ke %s: %v, mencoba IP berikutnya...", dialAddr, lastErr)
 	}
+
+	if conn == nil {
+		return nil, fmt.Errorf("gagal dial ke semua IP target (%s): %w", targetHost, lastErr)
+	}
+
 	if t.cfg.NoDelay {
 		if tc, ok := conn.(*net.TCPConn); ok {
 			tc.SetNoDelay(true)
@@ -183,7 +242,7 @@ func (t *SSHTunnel) openRawConn() (net.Conn, error) {
 	}
 
 	if payload != "" {
-		t.logger.Info("Injecting payload ke %s", dialAddr)
+		t.logger.Info("Injecting payload ke %s", conn.RemoteAddr().String())
 		if err := injectSplit(payload, conn); err != nil {
 			conn.Close()
 			return nil, err
@@ -331,7 +390,6 @@ func (t *SSHTunnel) dialOnce() error {
 		Timeout:         20 * time.Second,
 	}
 
-	// --- Fase 1: raw TCP + payload ---
 	rawStart := time.Now()
 	raw, err := t.openRawConn()
 	if err != nil {
@@ -346,7 +404,6 @@ func (t *SSHTunnel) dialOnce() error {
 		}
 	}}
 
-	// --- Fase 2: SSH handshake ---
 	hsStart := time.Now()
 	addr := net.JoinHostPort(t.cfg.Server, strconv.Itoa(t.cfg.ServerPort))
 	sshConn, chans, reqs, err := ssh.NewClientConn(mon, addr, sshCfg)
@@ -358,7 +415,6 @@ func (t *SSHTunnel) dialOnce() error {
 
 	client := ssh.NewClient(sshConn, chans, reqs)
 
-	// --- Fase 3: warmup — pastikan minimal satu channel bisa dibuka ---
 	warmupTarget := t.cfg.HealthCheck.Target
 	if warmupTarget == "" {
 		warmupTarget = "1.1.1.1:53"
@@ -386,7 +442,6 @@ func (t *SSHTunnel) dialOnce() error {
 	}
 	warmupDur := time.Since(warmupStart)
 
-	// --- Semua fase lolos: baru declare ready ---
 	t.mu.Lock()
 	t.client = client
 	t.mu.Unlock()
@@ -403,8 +458,6 @@ func (t *SSHTunnel) dialOnce() error {
 	return nil
 }
 
-// pinger mengirim keepalive dengan interval acak (Jitter) antara Pinger dan PingerMax.
-// Ini sangat efektif untuk mengelabui DPI ISP yang mendeteksi pola koneksi konstan.
 func (t *SSHTunnel) pinger(client *ssh.Client) {
 	for {
 		if !t.connected.Load() {
@@ -414,14 +467,12 @@ func (t *SSHTunnel) pinger(client *ssh.Client) {
 		minSec := t.cfg.Pinger
 		maxSec := t.cfg.PingerMax
 
-		// Validasi: jika max <= min, anggap fixed interval
 		if maxSec <= minSec {
 			maxSec = minSec
 		}
 
 		var waitSec int
 		if maxSec > minSec {
-			// Random antara min dan max (inclusive)
 			rangeSize := int64(maxSec - minSec)
 			nBig, err := rand.Int(rand.Reader, big.NewInt(rangeSize+1))
 			if err == nil {
@@ -433,16 +484,13 @@ func (t *SSHTunnel) pinger(client *ssh.Client) {
 			waitSec = minSec
 		}
 
-		// Debug log untuk memastikan jitter berjalan
 		t.logger.Debug("[pinger] Menunggu %d detik sebelum ping berikutnya", waitSec)
 		time.Sleep(time.Duration(waitSec) * time.Second)
 
-		// Cek lagi setelah tidur, mungkin tunnel sudah mati
 		if !t.connected.Load() {
 			return
 		}
 
-		// Kirim ping
 		if _, _, err := client.SendRequest("keepalive@openssh.com", true, nil); err != nil {
 			t.logger.Warn("Ping gagal → paksa reconnect: %v", err)
 			client.Close()
@@ -485,7 +533,6 @@ func (t *SSHTunnel) Run(ctx context.Context) {
 			continue
 		}
 
-		// Drain event disconnect basi dari generasi sebelumnya.
 		select {
 		case err := <-t.disconCh:
 			t.logger.Debug("[tunnel] drain disconnect basi: %v", err)
@@ -506,7 +553,15 @@ func (t *SSHTunnel) Run(ctx context.Context) {
 			t.setState("disconnected")
 			t.cleanup()
 			t.reconnect.Add(1)
-			t.lastReconnect.Store(time.Now().Unix()) // Catat waktu reconnect terakhir
+			now := time.Now().Unix()
+			t.lastReconnect.Store(now)
+			
+			t.reconnMu.Lock()
+			t.reconnectHistory = append(t.reconnectHistory, now)
+			if len(t.reconnectHistory) > 50 {
+				t.reconnectHistory = t.reconnectHistory[1:]
+			}
+			t.reconnMu.Unlock()
 		}
 
 		if !t.cfg.Reconnect.Enabled {
