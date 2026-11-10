@@ -49,7 +49,6 @@ const uiHTML = `<!DOCTYPE html>
   --log-bg:#06090d;
   --t:all 0.18s cubic-bezier(0.4,0,0.2,1);
 }
-/* ---------- LIGHT THEME (Susu/Cream) ---------- */
 :root[data-theme="light"]{
   --bg:#fbf7ee;
   --bg-elev:#f5efe1;
@@ -103,7 +102,6 @@ body::before{
 ::-webkit-scrollbar-thumb{background:var(--border-hover);border-radius:3px}
 code,pre,.mono{font-family:'JetBrains Mono',ui-monospace,monospace}
 
-/* ---------- HEADER ---------- */
 header{
   position:sticky;top:0;z-index:50;
   background:var(--header-bg);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
@@ -145,7 +143,6 @@ header{
 }
 .theme-btn:hover{background:var(--surface-hover);border-color:var(--border-hover)}
 
-/* ---------- NAV ---------- */
 nav{
   position:sticky;top:48px;z-index:49;
   background:var(--header-bg);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
@@ -161,7 +158,6 @@ nav button{
 nav button:hover{color:var(--text);background:var(--surface-hover)}
 nav button.active{color:var(--text);background:var(--surface-elev);box-shadow:var(--shadow-sm)}
 
-/* ---------- MAIN ---------- */
 main{padding:12px;max-width:1600px;margin:0 auto;position:relative;z-index:1}
 .tab{display:none;animation:fadeIn 0.2s ease-out}
 .tab.active{display:block}
@@ -187,7 +183,6 @@ main{padding:12px;max-width:1600px;margin:0 auto;position:relative;z-index:1}
 .stat-value{font-size:15px;font-weight:700;color:var(--text);line-height:1.1;letter-spacing:-0.3px}
 .stat-value.accent{color:var(--card-accent,var(--blue))}
 .stat-value.small{font-size:13px;font-weight:600}
-/* SUB lebih jelas (permintaan #1) */
 .stat-sub{
   color:var(--card-accent,var(--text-muted));
   opacity:0.85;
@@ -199,7 +194,11 @@ main{padding:12px;max-width:1600px;margin:0 auto;position:relative;z-index:1}
   line-height:1.3;
 }
 
-/* ---------- PROXY GROUPS ---------- */
+/* Clickable Card (untuk Reconnect) */
+.clickable-card { cursor: pointer; }
+.clickable-card:hover { border-color: var(--card-accent); box-shadow: var(--shadow); }
+.clickable-card:hover .stat-sub { text-decoration: underline; }
+
 .groups-section{margin-bottom:12px}
 .groups-title{font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px}
 .groups-container{display:flex;flex-direction:row;gap:8px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none}
@@ -218,7 +217,6 @@ main{padding:12px;max-width:1600px;margin:0 auto;position:relative;z-index:1}
 .group-btn.reject.active{background:var(--red);color:#fff}
 .group-btn.direct.active{background:var(--green);color:#fff}
 
-/* ---------- CHART ---------- */
 .chart-wrap{
   background:linear-gradient(145deg,var(--surface) 0%,var(--bg-elev) 100%);
   border:1px solid var(--border);border-radius:var(--radius-lg);
@@ -232,7 +230,6 @@ main{padding:12px;max-width:1600px;margin:0 auto;position:relative;z-index:1}
 #chart{width:100%;height:80px;display:block}
 .chart-range{color:var(--text-subtle);font-size:9px;font-family:'JetBrains Mono',monospace;margin-top:2px;text-align:right}
 
-/* ---------- TABLE ---------- */
 .tbl-wrap{border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--surface);overflow-x:auto;position:relative}
 table{width:100%;border-collapse:separate;border-spacing:0}
 th{
@@ -257,7 +254,6 @@ tr.closed-row td{opacity:0.55}
   th,td{padding:6px 8px;font-size:10px}
 }
 
-/* ---------- TAGS / BADGES ---------- */
 .tag{
   display:inline-flex;align-items:center;gap:2px;
   padding:1px 6px;border-radius:3px;font-size:9px;font-weight:600;
@@ -267,7 +263,6 @@ tr.closed-row td{opacity:0.55}
 .tag-DIRECT{background:var(--green-bg);color:var(--green)}
 .tag-REJECT{background:var(--red-bg);color:var(--red)}
 
-/* ---------- FILTER BAR ---------- */
 .filter-bar{
   display:flex;gap:6px;align-items:center;margin-bottom:10px;
   background:var(--surface);border:1px solid var(--border);
@@ -293,7 +288,6 @@ input[type=checkbox]:checked::after{
   transform:translate(-50%,-50%);color:#fff;font-size:9px;font-weight:700;
 }
 
-/* ---------- BUTTONS ---------- */
 .btn{
   background:var(--surface-elev);border:1px solid var(--border);
   color:var(--text);padding:5px 10px;border-radius:var(--radius-sm);
@@ -310,7 +304,6 @@ input[type=checkbox]:checked::after{
 .btn-icon.danger:hover{background:var(--red-bg);color:var(--red)}
 .btn-icon.edit:hover{background:var(--blue-bg);color:var(--blue)}
 
-/* ---------- SUB TABS ---------- */
 .sub-tabs{
   display:inline-flex;gap:2px;margin-bottom:8px;
   background:var(--surface);border:1px solid var(--border);
@@ -323,7 +316,6 @@ input[type=checkbox]:checked::after{
 }
 .sub-tabs button.active{color:var(--text);background:var(--surface-elev);box-shadow:var(--shadow-sm)}
 
-/* ---------- LOGS & CONFIG ---------- */
 #logbox{
   background:var(--log-bg);border:1px solid var(--border);
   border-radius:var(--radius-lg);padding:8px 10px;
@@ -338,7 +330,6 @@ input[type=checkbox]:checked::after{
   font-size:10px;line-height:1.5;color:var(--text);
 }
 
-/* ---------- EMPTY / HINT ---------- */
 .empty{text-align:center;color:var(--text-subtle);padding:20px 12px;font-style:italic;font-size:11px}
 .hint{
   color:var(--text-muted);font-size:11px;
@@ -348,11 +339,9 @@ input[type=checkbox]:checked::after{
 }
 .hint code{background:var(--surface-elev);padding:1px 4px;border-radius:3px;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--blue)}
 
-/* ---------- BADGE ---------- */
 .badge-on{padding:1px 6px;border-radius:3px;font-size:9px;font-weight:600;background:var(--green-bg);color:var(--green);text-transform:uppercase}
 .badge-off{padding:1px 6px;border-radius:3px;font-size:9px;font-weight:600;background:var(--red-bg);color:var(--red);text-transform:uppercase}
 
-/* ---------- TOAST ---------- */
 #toastContainer{position:fixed;bottom:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:6px;pointer-events:none}
 .toast{
   background:var(--surface-elev);border:1px solid var(--border-hover);color:var(--text);
@@ -372,17 +361,47 @@ input[type=checkbox]:checked::after{
 .reason{color:var(--text-muted);font-size:10px;font-family:'JetBrains Mono',monospace}
 .bytes{color:var(--text-muted);font-size:10px;font-family:'JetBrains Mono',monospace}
 
-/* Quick Add Row di Limiter */
 .quick-add-row td { background: var(--blue-bg); padding: 4px 8px; }
 .quick-add-row input, .quick-add-row select { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 3px 6px; border-radius: 3px; font-size: 10px; width: 100%; font-family:inherit; }
 .quick-add-row input:focus, .quick-add-row select:focus { outline: none; border-color: var(--blue); }
-
-/* Inline edit row */
-.edit-row input[type=number]{
-  background:var(--bg-elev);border:1px solid var(--border);
-  border-radius:3px;color:var(--text);padding:3px 6px;font-size:10px;width:70px;font-family:inherit;
-}
+.edit-row input[type=number]{ background:var(--bg-elev);border:1px solid var(--border); border-radius:3px;color:var(--text);padding:3px 6px;font-size:10px;width:70px;font-family:inherit; }
 .edit-row input[type=number]:focus{outline:none;border-color:var(--blue)}
+
+/* ---------- MODAL (Pop-up Reconnect) ---------- */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+  z-index: 1000; display: none; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity 0.2s ease;
+}
+.modal-overlay.active { display: flex; opacity: 1; }
+.modal-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); width: 90%; max-width: 400px; max-height: 80vh;
+  display: flex; flex-direction: column; box-shadow: var(--shadow-lg);
+  transform: translateY(20px); transition: transform 0.2s ease;
+}
+.modal-overlay.active .modal-card { transform: translateY(0); }
+.modal-header {
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+  font-weight: 600; font-size: 13px;
+}
+.modal-close {
+  background: transparent; border: none; color: var(--text-muted);
+  cursor: pointer; font-size: 18px; line-height: 1; padding: 0 4px;
+  transition: color 0.15s;
+}
+.modal-close:hover { color: var(--text); }
+.modal-body { padding: 12px 16px; overflow-y: auto; flex: 1; }
+.history-item {
+  padding: 8px 0; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 12px;
+}
+.history-item:last-child { border-bottom: none; }
+.history-time { font-family: 'JetBrains Mono', monospace; color: var(--text); font-weight: 600; }
+.history-ago { color: var(--text-muted); font-family: 'JetBrains Mono', monospace; font-size: 11px; }
 
 @media(min-width:769px){
   .stat{grid-template-columns:repeat(4,1fr)}
@@ -516,7 +535,7 @@ input[type=checkbox]:checked::after{
   </div>
 </div>
 
-<!-- LIMITER (no top form anymore) -->
+<!-- LIMITER -->
 <div id="tab-limiter" class="tab">
   <div class="hint">
     Kelola limit bandwidth <b>per IP</b>. Gunakan baris <b>Quick-Add</b> di bawah tabel untuk menambah, atau klik <b>✎</b> untuk edit langsung di baris.
@@ -542,9 +561,12 @@ input[type=checkbox]:checked::after{
   <div class="filter-bar">
     <label><input type="checkbox" id="pauseLog" onchange="updatePauseLog()"> Pause</label>
     <input type="text" id="logSearch" placeholder="Search log..." oninput="filterLog()" style="flex:1;min-width:100px">
-    <input type="number" id="logMaxLines" placeholder="Max lines" min="100" style="width:90px" title="Batas baris maksimum di layar">
-    <input type="number" id="logClearMin" placeholder="Auto-clear (mnt)" min="0" style="width:110px" title="0 = tidak pernah clear otomatis">
-    <button class="btn" onclick="document.getElementById('logbox').textContent='';logBuffer=''">Clear</button>
+    
+    <!-- FIX: Menambahkan onchange agar tersimpan otomatis -->
+    <input type="number" id="logMaxLines" placeholder="Max lines" min="100" style="width:90px" title="Batas baris maksimum di layar" onchange="applyLogSettings()">
+    <input type="number" id="logClearMin" placeholder="Auto-clear (mnt)" min="0" style="width:110px" title="0 = tidak pernah clear otomatis" onchange="applyLogSettings()">
+    
+    <button class="btn" onclick="clearLogs()">Clear</button>
   </div>
   <div id="logbox">Connecting to log stream...</div>
 </div>
@@ -555,6 +577,19 @@ input[type=checkbox]:checked::after{
 </div>
 
 </main>
+
+<!-- MODAL RECONNECT HISTORY -->
+<div id="reconnectModal" class="modal-overlay" onclick="closeReconnectModal(event)">
+  <div class="modal-card" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <span>Riwayat Reconnect</span>
+      <button class="modal-close" onclick="closeReconnectModal()">✕</button>
+    </div>
+    <div class="modal-body" id="reconnectHistoryList">
+      <div class="empty">Loading...</div>
+    </div>
+  </div>
+</div>
 
 <div id="toastContainer"></div>
 
@@ -623,6 +658,13 @@ function timeAgo(unixTs){
   }
   return h + 'j ' + rm + 'm lalu';
 }
+function fmtReconnShort(ts) {
+  if(!ts) return 'belum pernah';
+  const d = new Date(ts * 1000);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return hh+':'+mm+' ('+timeAgo(ts)+')';
+}
 function toast(msg,type){
   type=type||'info';
   const c=document.getElementById('toastContainer');
@@ -661,7 +703,7 @@ async function loadStatus(){
     document.getElementById('versionInfo').textContent='v'+(d.version||'?');
 
     const stateColor=state==='connected'?'var(--green)':(state==='connecting'?'var(--yellow)':'var(--red)');
-    const reconnectSub = d.reconnects > 0 ? timeAgo(d.last_reconnect) : '';
+    const reconnSub = d.reconnects > 0 ? fmtReconnShort(d.last_reconnect) : 'belum pernah';
 
     document.getElementById('statsRow').innerHTML=
       card('◉','State',esc(state),'accent',stateColor)+
@@ -670,22 +712,61 @@ async function loadStatus(){
       card('⬇','Download',fmtSpeed(d.speed_down),'accent','var(--blue)','Total: '+fmtBytes(d.total_down))+
       card('⇄','Active',d.active_conns||0,'')+
       card('✓','Closed',d.closed_conns||0,'')+
-      card('↻','Reconnects',d.reconnects||0,'small','var(--purple)', reconnectSub)+
+      card('↻','Reconnects',d.reconnects||0,'small','var(--purple)', reconnSub, 'showReconnectModal()')+
       card('◇','DNS',d.dns_queries||0,'small','var(--purple)','pool: '+(d.dns_pool?d.dns_pool.size:0));
   }catch(e){console.error(e)}
 }
-function card(icon,label,value,extra,accent,sub){
+function card(icon,label,value,extra,accent,sub,onclick){
   let accentVar='';
   if(accent && accent.startsWith('var(--')){
     accentVar=accent.replace('var(--','').replace(')','');
   }
   const style2=accentVar?'style="--card-accent:var(--'+accentVar+');--card-icon-bg:var(--'+accentVar+'-bg)"':'';
   const cls='stat-value'+(extra==='accent'?' accent':(extra==='small'?' small':''));
-  return '<div class="stat-card" '+style2+'>'+
+  const clickable = onclick ? ' class="stat-card clickable-card" onclick="'+onclick+'"' : ' class="stat-card"';
+  
+  let subHtml = '';
+  if (sub) {
+    if (onclick) {
+      subHtml = '<div class="stat-sub" style="display:flex;justify-content:space-between;align-items:center">'+
+                  '<span>'+sub+'</span>'+
+                  '<span style="font-size:10px;opacity:0.7">▼</span>'+
+                '</div>';
+    } else {
+      subHtml = '<div class="stat-sub">'+sub+'</div>';
+    }
+  }
+
+  return '<div'+clickable+' '+style2+'>'+
     '<div class="stat-head"><div class="stat-icon">'+icon+'</div><div class="stat-label">'+label+'</div></div>'+
     '<div class="'+cls+'">'+value+'</div>'+
-    (sub?'<div class="stat-sub">'+sub+'</div>':'')+
+    subHtml+
   '</div>';
+}
+
+// ============ MODAL RECONNECT ============
+function showReconnectModal() {
+  if (!lastStatus.reconnect_history || lastStatus.reconnect_history.length === 0) {
+    toast('Belum ada data reconnect', 'info');
+    return;
+  }
+  const list = document.getElementById('reconnectHistoryList');
+  const reversed = [...lastStatus.reconnect_history].reverse();
+  list.innerHTML = reversed.map(ts => {
+    const d = new Date(ts * 1000);
+    const timeStr = d.toLocaleTimeString('id-ID', {hour12: false});
+    const dateStr = d.toLocaleDateString('id-ID', {day:'2-digit', month:'short', year:'numeric'});
+    return '<div class="history-item">'+
+      '<span class="history-time">'+dateStr+' '+timeStr+'</span>'+
+      '<span class="history-ago">'+timeAgo(ts)+'</span>'+
+    '</div>';
+  }).join('');
+  document.getElementById('reconnectModal').classList.add('active');
+}
+
+function closeReconnectModal(e) {
+  if (e && e.target !== e.currentTarget) return;
+  document.getElementById('reconnectModal').classList.remove('active');
 }
 
 // ============ traffic chart ============
@@ -968,7 +1049,6 @@ async function loadLimiter(){
         '</tr>';
       }).join('');
     }
-    // Quick add row
     html += '<tr class="quick-add-row">'+
         '<td>'+
           '<select id="qaIPSelect" onchange="handleQaIPSelect(this)"><option value="">-- Pilih IP --</option></select>'+
@@ -981,11 +1061,10 @@ async function loadLimiter(){
       '</tr>';
 
     body.innerHTML = html;
-    loadDevices(); // to populate dropdown
+    loadDevices();
   }catch(e){console.error(e)}
 }
 
-// Inline edit — klik ✎ mengubah baris menjadi input
 function editRow(ip, up, down, enabled){
   const row = document.getElementById('rule-'+ip);
   if (!row) return;
@@ -1052,14 +1131,29 @@ function initLogSettings() {
 function applyLogSettings() {
   const m = parseInt(document.getElementById('logMaxLines').value);
   const c = parseInt(document.getElementById('logClearMin').value);
+  
+  // Validasi
   logMaxLines = (isNaN(m) || m < 100) ? 2000 : m;
   logClearMin = (isNaN(c) || c < 0) ? 0 : c;
+  
+  // Simpan ke localStorage
   localStorage.setItem('sockshttp_logMaxLines', logMaxLines);
   localStorage.setItem('sockshttp_logClearMin', logClearMin);
+  
+  // Kembalikan nilai tervalidasi ke input
+  document.getElementById('logMaxLines').value = logMaxLines;
+  document.getElementById('logClearMin').value = logClearMin;
+
   trimLogBuffer();
   scheduleLogClear();
   renderLog();
   toast('Log settings saved (max '+logMaxLines+' lines, clear '+logClearMin+'min)', 'success');
+}
+
+function clearLogs() {
+  logBuffer = '';
+  renderLog();
+  scheduleLogClear(); // Reset timer jika auto-clear menyala
 }
 
 function trimLogBuffer() {
