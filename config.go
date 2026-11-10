@@ -75,7 +75,7 @@ type Config struct {
 
 	TunnelType        string   `yaml:"tunnel_type"`
 	ProxyHost         string   `yaml:"proxy_host"`
-	ProxyHostFallback []string `yaml:"proxy_host_fallback"` // <--- Field ini sebelumnya hilang
+	ProxyHostFallback []string `yaml:"proxy_host_fallback"`
 	ProxyPort         int      `yaml:"proxy_port"`
 	UseDefaultPayload bool     `yaml:"use_default_payload"`
 	CustomPayload     string   `yaml:"custom_payload"`
@@ -94,6 +94,7 @@ type Config struct {
 
 	DNS struct {
 		Enabled  bool   `yaml:"enabled"`
+		Mode     string `yaml:"mode"` // <-- Tambahan: "fakeip" atau "forward"
 		Bind     string `yaml:"bind"`
 		Upstream string `yaml:"upstream"`
 	} `yaml:"dns"`
@@ -163,6 +164,7 @@ func DefaultConfig() *Config {
 	c.SOCKS5.Bind = "127.0.0.1"
 	c.SOCKS5.Port = 7777
 	c.DNS.Enabled = true
+	c.DNS.Mode = "fakeip" // Default mode
 	c.DNS.Bind = "0.0.0.0:1053"
 	c.DNS.Upstream = "1.1.1.1:53"
 	c.Redirect.Bind = "127.0.0.1:7892"
