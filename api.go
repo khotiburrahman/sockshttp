@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const authCookieName = "sockshttp_auth"
+
 type trafficSample struct {
 	T    int64 `json:"t"`
 	Up   int64 `json:"up"`
@@ -17,17 +19,18 @@ type trafficSample struct {
 }
 
 type APIServer struct {
-	cfg      *Config
-	logger   *Logger
-	tunnel   *SSHTunnel
-	proxyMgr *ProxyManager
-	tracker  *ConnTracker
-	dns      *DNSServer
-	router   *Router
-	limiter  *BandwidthLimiter
-	start    time.Time
-	srv      *http.Server
-	done     chan struct{}
+	cfg       *Config
+	logger    *Logger
+	tunnel    *SSHTunnel
+	proxyMgr  *ProxyManager
+	tracker   *ConnTracker
+	dns       *DNSServer
+	router    *Router
+	limiter   *BandwidthLimiter
+	realCache *RealIPCache
+	start     time.Time
+	srv       *http.Server
+	done      chan struct{}
 
 	speedMu   sync.Mutex
 	speedUp   int64
@@ -38,11 +41,12 @@ type APIServer struct {
 	maxTraffic int
 }
 
-func NewAPIServer(cfg *Config, logger *Logger, tunnel *SSHTunnel, pm *ProxyManager, tr *ConnTracker, dns *DNSServer, router *Router, limiter *BandwidthLimiter) *APIServer {
+func NewAPIServer(cfg *Config, logger *Logger, tunnel *SSHTunnel, pm *ProxyManager, tr *ConnTracker, dns *DNSServer, router *Router, limiter *BandwidthLimiter, realCache *RealIPCache) *APIServer {
 	a := &APIServer{
 		cfg: cfg, logger: logger, tunnel: tunnel,
 		proxyMgr: pm, tracker: tr, dns: dns, router: router, limiter: limiter,
-		start: time.Now(), done: make(chan struct{}),
+		realCache: realCache,
+		start:     time.Now(), done: make(chan struct{}),
 		maxTraffic: 120,
 	}
 	go a.rateSampler()
@@ -90,6 +94,7 @@ func (a *APIServer) rateSampler() {
 func (a *APIServer) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", a.handleUI)
+	mux.HandleFunc("/logout", a.handleLogout)
 	mux.HandleFunc("/api/status", a.auth(a.handleStatus))
 	mux.HandleFunc("/api/proxies", a.auth(a.handleProxies))
 	mux.HandleFunc("/api/proxies/", a.auth(a.handleProxySwitch))
@@ -98,8 +103,6 @@ func (a *APIServer) Start() error {
 	mux.HandleFunc("/api/devices", a.auth(a.handleDevices))
 	mux.HandleFunc("/api/traffic", a.auth(a.handleTraffic))
 	mux.HandleFunc("/api/rules/test", a.auth(a.handleRuleTest))
-	mux.HandleFunc("/api/fakeip/save", a.auth(a.handleFakeIPSave))
-	mux.HandleFunc("/api/fakeip/stats", a.auth(a.handleFakeIPStats))
 	mux.HandleFunc("/api/logs", a.auth(a.handleLogs))
 	mux.HandleFunc("/api/config", a.auth(a.handleConfig))
 	mux.HandleFunc("/api/limiter", a.auth(a.handleLimiter))
@@ -115,17 +118,29 @@ func (a *APIServer) Start() error {
 	return nil
 }
 
+// authOK — cek header X-Secret, query ?secret=, atau cookie.
+// Kalau API.Secret kosong, siapa saja boleh akses.
+func (a *APIServer) authOK(r *http.Request) bool {
+	if a.cfg.API.Secret == "" {
+		return true
+	}
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Secret")), []byte(a.cfg.API.Secret)) == 1 {
+		return true
+	}
+	if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("secret")), []byte(a.cfg.API.Secret)) == 1 {
+		return true
+	}
+	if c, err := r.Cookie(authCookieName); err == nil {
+		if subtle.ConstantTimeCompare([]byte(c.Value), []byte(a.cfg.API.Secret)) == 1 {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *APIServer) auth(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if a.cfg.API.Secret == "" {
-			h(w, r)
-			return
-		}
-		token := r.Header.Get("X-Secret")
-		if token == "" {
-			token = r.URL.Query().Get("secret")
-		}
-		if subtle.ConstantTimeCompare([]byte(token), []byte(a.cfg.API.Secret)) != 1 {
+		if !a.authOK(r) {
 			http.Error(w, "unauthorized", 401)
 			return
 		}
@@ -140,7 +155,6 @@ func (a *APIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	down := a.speedDown
 	a.speedMu.Unlock()
 
-	// Ambil riwayat reconnect
 	a.tunnel.reconnMu.Lock()
 	hist := make([]int64, len(a.tunnel.reconnectHistory))
 	copy(hist, a.tunnel.reconnectHistory)
@@ -158,7 +172,7 @@ func (a *APIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"last_error":        lastErr,
 		"dns_queries":       a.dns.queries.Load(),
 		"dns_errors":        a.dns.errors.Load(),
-		"dns_pool":          a.dns.pool.Stats(),
+		"real_cache":        a.realCache.Stats(),
 		"total_up":          a.tracker.TotalUp.Load(),
 		"total_down":        a.tracker.TotalDown.Load(),
 		"speed_up":          up,
@@ -308,36 +322,6 @@ func (a *APIServer) handleRuleTest(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (a *APIServer) handleFakeIPSave(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, "method not allowed", 405)
-		return
-	}
-	if a.cfg.FakeIPFile == "" {
-		http.Error(w, "fakeip_file tidak dikonfigurasi", 400)
-		return
-	}
-	if err := a.dns.pool.Save(); err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	a.logger.Info("fake-IP saved via API ke %s", a.cfg.FakeIPFile)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"ok":   true,
-		"file": a.cfg.FakeIPFile,
-	})
-}
-
-func (a *APIServer) handleFakeIPStats(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"enabled": a.cfg.DNS.Enabled,
-		"file":    a.cfg.FakeIPFile,
-		"stats":   a.dns.pool.Stats(),
-	})
-}
-
 func (a *APIServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	ch := a.logger.Subscribe()
@@ -372,7 +356,8 @@ func (a *APIServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"socks5":          fmt.Sprintf("%s:%d", a.cfg.SOCKS5.Bind, a.cfg.SOCKS5.Port),
 		"dns":             a.cfg.DNS.Bind,
 		"dns_enabled":     a.cfg.DNS.Enabled,
-		"fakeip_file":     a.cfg.FakeIPFile,
+		"dns_mode":        a.cfg.DNS.Mode,
+		"dns_upstream":    a.cfg.DNS.Upstream,
 		"redirect":        a.cfg.Redirect.Bind,
 		"conn_retention":  a.cfg.ConnRetention.D().String(),
 		"startup_timeout": a.cfg.StartupTimeout.D().String(),
@@ -384,7 +369,7 @@ func (a *APIServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ============ Limiter API ============
+// ============ Limiter API (tidak berubah) ============
 
 func (a *APIServer) handleLimiter(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -433,9 +418,46 @@ func (a *APIServer) handleLimiterAction(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
 
+// ============ Auth / UI ============
+
 func (a *APIServer) handleUI(w http.ResponseWriter, r *http.Request) {
+	// Kalau ?secret=xxx cocok → set cookie, redirect ke / bersih
+	if a.cfg.API.Secret != "" {
+		if sec := r.URL.Query().Get("secret"); sec != "" &&
+			subtle.ConstantTimeCompare([]byte(sec), []byte(a.cfg.API.Secret)) == 1 {
+			http.SetCookie(w, &http.Cookie{
+				Name:     authCookieName,
+				Value:    a.cfg.API.Secret,
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteStrictMode,
+				MaxAge:   86400 * 30,
+			})
+			http.Redirect(w, r, "/", http.StatusFound)
+			return
+		}
+	}
+
+	authed := a.authOK(r)
+	flag := "false"
+	if authed {
+		flag = "true"
+	}
+	html := strings.Replace(uiHTML, "__AUTH_FLAG__", flag, 1)
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(uiHTML))
+	w.Write([]byte(html))
+}
+
+func (a *APIServer) handleLogout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     authCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+	})
+	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 func (a *APIServer) Close() {
