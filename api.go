@@ -140,24 +140,31 @@ func (a *APIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	down := a.speedDown
 	a.speedMu.Unlock()
 
+	// Ambil riwayat reconnect
+	a.tunnel.reconnMu.Lock()
+	hist := make([]int64, len(a.tunnel.reconnectHistory))
+	copy(hist, a.tunnel.reconnectHistory)
+	a.tunnel.reconnMu.Unlock()
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"version":        Version,
-		"state":          a.tunnel.State(),
-		"uptime_sec":     int(time.Since(a.start).Seconds()),
-		"server":         fmt.Sprintf("%s:%d", a.cfg.Server, a.cfg.ServerPort),
-		"reconnects":     a.tunnel.reconnect.Load(),
-		"last_reconnect": a.tunnel.lastReconnect.Load(), // Waktu reconnect terakhir
-		"last_error":     lastErr,
-		"dns_queries":    a.dns.queries.Load(),
-		"dns_errors":     a.dns.errors.Load(),
-		"dns_pool":       a.dns.pool.Stats(),
-		"total_up":       a.tracker.TotalUp.Load(),
-		"total_down":     a.tracker.TotalDown.Load(),
-		"speed_up":       up,
-		"speed_down":     down,
-		"active_conns":   a.tracker.ActiveCount(),
-		"closed_conns":   a.tracker.ClosedCount(),
+		"version":           Version,
+		"state":             a.tunnel.State(),
+		"uptime_sec":        int(time.Since(a.start).Seconds()),
+		"server":            fmt.Sprintf("%s:%d", a.cfg.Server, a.cfg.ServerPort),
+		"reconnects":        a.tunnel.reconnect.Load(),
+		"last_reconnect":    a.tunnel.lastReconnect.Load(),
+		"reconnect_history": hist,
+		"last_error":        lastErr,
+		"dns_queries":       a.dns.queries.Load(),
+		"dns_errors":        a.dns.errors.Load(),
+		"dns_pool":          a.dns.pool.Stats(),
+		"total_up":          a.tracker.TotalUp.Load(),
+		"total_down":        a.tracker.TotalDown.Load(),
+		"speed_up":          up,
+		"speed_down":        down,
+		"active_conns":      a.tracker.ActiveCount(),
+		"closed_conns":      a.tracker.ClosedCount(),
 	})
 }
 
