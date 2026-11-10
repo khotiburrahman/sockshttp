@@ -85,10 +85,11 @@ func run() int {
 		}
 	}
 
-	logger.Info("=== SocksHTTP-Go %s (integrated router) ===", Version)
-	logger.Info("Server=%s:%d Tunnel=%s SOCKS5=%s:%d DNS=%s API=%s",
+	logger.Info("=== SocksHTTP-Go %s (forward-only router) ===", Version)
+	logger.Info("Server=%s:%d Tunnel=%s SOCKS5=%s:%d DNS=%s(%s) API=%s",
 		cfg.Server, cfg.ServerPort, cfg.TunnelType,
-		cfg.SOCKS5.Bind, cfg.SOCKS5.Port, cfg.DNS.Bind, cfg.API.Bind)
+		cfg.SOCKS5.Bind, cfg.SOCKS5.Port,
+		cfg.DNS.Bind, cfg.DNS.Mode, cfg.API.Bind)
 
 	if cfg.PIDFile != "" {
 		os.MkdirAll(filepath.Dir(cfg.PIDFile), 0755)
@@ -99,15 +100,9 @@ func run() int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	pool := NewFakeIPPool()
-	if cfg.DNS.Enabled && cfg.FakeIPFile != "" {
-		if err := pool.Load(cfg.FakeIPFile); err != nil {
-			logger.Warn("fake-IP load %s: %v (mulai kosong)", cfg.FakeIPFile, err)
-		} else if s := pool.Stats(); s["size"] > 0 {
-			logger.Info("fake-IP loaded %d entries dari %s", s["size"], cfg.FakeIPFile)
-		}
-		go pool.DirtyLoop(ctx, logger)
-	}
+	// RealIPCache — mapping IP→domain dari DNS forward (pengganti Fake-IP pool)
+	realCache := NewRealIPCache()
+	go realCache.PruneLoop(ctx)
 
 	tunnel := NewSSHTunnel(cfg, logger)
 	proxyMgr := NewProxyManager(cfg.ProxyGroups, cfg.StateFile)
@@ -119,7 +114,7 @@ func run() int {
 	tracker := NewConnTracker(cfg.StateFile, cfg.ConnRetention.D())
 	defer tracker.Shutdown()
 
-	// --- Bandwidth Limiter ---
+	// --- Bandwidth Limiter (tidak berubah) ---
 	limiter := NewBandwidthLimiter(cfg.Limiter.Enabled, cfg.Limiter.File, logger)
 	if cfg.Limiter.Enabled {
 		logger.Info("Limiter: enabled, %d rules dari %s", len(limiter.List()), cfg.Limiter.File)
@@ -127,10 +122,10 @@ func run() int {
 		logger.Info("Limiter: disabled (rules tetap tersimpan di %s)", cfg.Limiter.File)
 	}
 
-	dns := NewDNSServer(cfg, logger, pool, tunnel)
-	socks5 := NewSOCKS5Server(cfg, logger, tunnel, proxyMgr, pool, tracker)
+	dns := NewDNSServer(cfg, logger, realCache, tunnel)
+	socks5 := NewSOCKS5Server(cfg, logger, tunnel, proxyMgr, tracker)
 
-	router, err := NewRouter(cfg, logger, tunnel, dns, pool, proxyMgr, tracker, limiter)
+	router, err := NewRouter(cfg, logger, tunnel, dns, realCache, proxyMgr, tracker, limiter)
 	if err != nil {
 		logger.Error("Router init: %v", err)
 		return 1
@@ -176,7 +171,7 @@ func run() int {
 		return 1
 	}
 
-	api := NewAPIServer(cfg, logger, tunnel, proxyMgr, tracker, dns, router, limiter)
+	api := NewAPIServer(cfg, logger, tunnel, proxyMgr, tracker, dns, router, limiter, realCache)
 	if err := api.Start(); err != nil {
 		logger.Error("API: %v", err)
 		return 1
@@ -186,7 +181,7 @@ func run() int {
 	logger.Info("  SEMUA LAYANAN SIAP")
 	logger.Info("  Web UI   : http://%s/", cfg.API.Bind)
 	logger.Info("  SOCKS5   : %s:%d", cfg.SOCKS5.Bind, cfg.SOCKS5.Port)
-	logger.Info("  DNS      : %s", cfg.DNS.Bind)
+	logger.Info("  DNS      : %s (forward, upstream %s)", cfg.DNS.Bind, cfg.DNS.Upstream)
 	logger.Info("  REDIRECT : %s", cfg.Redirect.Bind)
 	logger.Info("=================================================")
 
@@ -206,14 +201,6 @@ func run() int {
 	socks5.Close()
 	if cfg.DNS.Enabled {
 		dns.Close()
-	}
-
-	if cfg.DNS.Enabled && cfg.FakeIPFile != "" {
-		if err := pool.Save(); err != nil {
-			logger.Warn("fake-IP final save: %v", err)
-		} else {
-			logger.Info("fake-IP saved ke %s", cfg.FakeIPFile)
-		}
 	}
 
 	logger.Info("Shutdown: menutup tunnel...")
