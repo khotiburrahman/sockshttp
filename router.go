@@ -508,25 +508,25 @@ func getOriginalDst(conn *net.TCPConn) (string, error) {
 // Router
 // =========================================================
 type Router struct {
-	cfg      *Config
-	logger   *Logger
-	tunnel   *SSHTunnel
-	dns      *DNSServer
-	pool     *FakeIPPool
-	proxyMgr *ProxyManager
-	tracker  *ConnTracker
-	limiter  *BandwidthLimiter
-	rules    []*Rule
+	cfg       *Config
+	logger    *Logger
+	tunnel    *SSHTunnel
+	dns       *DNSServer
+	realCache *RealIPCache
+	proxyMgr  *ProxyManager
+	tracker   *ConnTracker
+	limiter   *BandwidthLimiter
+	rules     []*Rule
 
 	ln     net.Listener
 	closed atomic.Bool
 	wg     sync.WaitGroup
 }
 
-func NewRouter(cfg *Config, logger *Logger, tunnel *SSHTunnel, dns *DNSServer, pool *FakeIPPool, pm *ProxyManager, tracker *ConnTracker, limiter *BandwidthLimiter) (*Router, error) {
+func NewRouter(cfg *Config, logger *Logger, tunnel *SSHTunnel, dns *DNSServer, realCache *RealIPCache, pm *ProxyManager, tracker *ConnTracker, limiter *BandwidthLimiter) (*Router, error) {
 	r := &Router{
 		cfg: cfg, logger: logger, tunnel: tunnel, dns: dns,
-		pool: pool, proxyMgr: pm, tracker: tracker, limiter: limiter,
+		realCache: realCache, proxyMgr: pm, tracker: tracker, limiter: limiter,
 	}
 	for _, rs := range cfg.Rules {
 		rule, err := parseRule(rs)
@@ -607,13 +607,12 @@ func (r *Router) handleConn(raw net.Conn) {
 	host, portStr, _ := net.SplitHostPort(dstAddr)
 	port, _ := strconv.Atoi(portStr)
 
+	// Forward-only: dstIP selalu IP asli. realCache hanya menambah
+	// informasi hostname kalau IP itu pernah di-resolve via tunnel.
 	dstIP := host
 	domain := ""
-	if r.pool.IsFake(host) {
-		if d, ok := r.pool.LookupDomain(host); ok {
-			domain = d
-			dstIP = ""
-		}
+	if d, ok := r.realCache.Lookup(host); ok {
+		domain = d
 	}
 
 	proxy, ruleStr, chainStr := r.dispatch(srcIP, dstIP, domain)
@@ -663,13 +662,7 @@ func (r *Router) handleConn(raw net.Conn) {
 	}
 }
 
-// pipe — pipe dua arah dengan counter byte + limiter (jika enabled).
-//
-// Catatan penting: limiter di-wrap SELALU saat global enabled, tanpa cek
-// HasRule() di awal. Ini membuat rule yang ditambah/dihapus/diubah saat
-// koneksi sedang aktif ikut berlaku (delay maks 1 chunk = 16 KiB).
-// Cek per-chunk dilakukan di BandwidthLimiter.wait() — biayanya RLock +
-// map lookup (~50ns), nol efek ke throughput.
+// pipe — TIDAK DIUBAH. Limiter tetap di-wrap selalu saat enabled.
 func (r *Router) pipe(a, b net.Conn, track *Connection) {
 	track.AddConn(a)
 	track.AddConn(b)
