@@ -73,14 +73,15 @@ type Config struct {
 	Password   string `yaml:"password"`
 	KeyPath    string `yaml:"key_path,omitempty"`
 
-	TunnelType        string `yaml:"tunnel_type"`
-	ProxyHost         string `yaml:"proxy_host"`
-	ProxyPort         int    `yaml:"proxy_port"`
-	UseDefaultPayload bool   `yaml:"use_default_payload"`
-	CustomPayload     string `yaml:"custom_payload"`
+	TunnelType        string   `yaml:"tunnel_type"`
+	ProxyHost         string   `yaml:"proxy_host"`
+	ProxyHostFallback []string `yaml:"proxy_host_fallback"` // <--- Field ini sebelumnya hilang
+	ProxyPort         int      `yaml:"proxy_port"`
+	UseDefaultPayload bool     `yaml:"use_default_payload"`
+	CustomPayload     string   `yaml:"custom_payload"`
 
 	Pinger    int  `yaml:"pinger"`
-	PingerMax int  `yaml:"pinger_max"` // Batas maksimal random ping
+	PingerMax int  `yaml:"pinger_max"`
 	NoDelay   bool `yaml:"no_delay"`
 
 	StartupTimeout Duration `yaml:"startup_timeout"`
@@ -123,7 +124,6 @@ type Config struct {
 		FailureThreshold int      `yaml:"failure_threshold"`
 	} `yaml:"health_check"`
 
-	// Bandwidth limiter — Control Plane (rules per-IP disimpan di `file`).
 	Limiter struct {
 		Enabled bool   `yaml:"enabled"`
 		File    string `yaml:"file"`
@@ -155,7 +155,7 @@ func DefaultConfig() *Config {
 		ServerPort:     22,
 		TunnelType:     "direct",
 		Pinger:         5,
-		PingerMax:      30,
+		PingerMax:      15,
 		NoDelay:        true,
 		StartupTimeout: Duration(60 * time.Second),
 		ConnRetention:  Duration(60 * time.Second),
@@ -168,7 +168,7 @@ func DefaultConfig() *Config {
 	c.Redirect.Bind = "127.0.0.1:7892"
 	c.API.Bind = "0.0.0.0:9090"
 	c.Reconnect.Enabled = true
-	c.Reconnect.InitialDelay = Duration(2 * time.Second)
+	c.Reconnect.InitialDelay = Duration(5 * time.Second)
 	c.Reconnect.MaxDelay = Duration(60 * time.Second)
 	c.HealthCheck.Enabled = true
 	c.HealthCheck.Interval = Duration(30 * time.Second)
@@ -340,8 +340,6 @@ func LoadSKSConfig(r io.Reader, cfg *Config) error {
 			cfg.ValidityDate = n
 		}
 	}
-	// SKS tidak memiliki konsep pinger acak (PingerMax),
-	// jadi kita samakan nilainya agar tidak error saat parsing.
 	cfg.PingerMax = cfg.Pinger
 
 	return nil
