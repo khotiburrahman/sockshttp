@@ -10,7 +10,6 @@ const uiHTML = `<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script>
-  // Set theme ASAP untuk mencegah flash
   (function(){
     var t = localStorage.getItem('sockshttp_theme') || 'dark';
     document.documentElement.setAttribute('data-theme', t);
@@ -163,7 +162,6 @@ main{padding:12px;max-width:1600px;margin:0 auto;position:relative;z-index:1}
 .tab.active{display:block}
 @keyframes fadeIn{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:translateY(0)}}
 
-/* ---------- STAT CARDS ---------- */
 .stat{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-bottom:12px}
 .stat-card{
   background:linear-gradient(145deg,var(--surface) 0%,var(--bg-elev) 100%);
@@ -193,8 +191,6 @@ main{padding:12px;max-width:1600px;margin:0 auto;position:relative;z-index:1}
   letter-spacing:-0.1px;
   line-height:1.3;
 }
-
-/* Clickable Card (untuk Reconnect) */
 .clickable-card { cursor: pointer; }
 .clickable-card:hover { border-color: var(--card-accent); box-shadow: var(--shadow); }
 .clickable-card:hover .stat-sub { text-decoration: underline; }
@@ -367,7 +363,6 @@ input[type=checkbox]:checked::after{
 .edit-row input[type=number]{ background:var(--bg-elev);border:1px solid var(--border); border-radius:3px;color:var(--text);padding:3px 6px;font-size:10px;width:70px;font-family:inherit; }
 .edit-row input[type=number]:focus{outline:none;border-color:var(--blue)}
 
-/* ---------- MODAL (Pop-up Reconnect) ---------- */
 .modal-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6);
   backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
@@ -424,6 +419,7 @@ input[type=checkbox]:checked::after{
   <span id="serverInfo" class="header-info"></span>
   <div class="header-right">
     <button id="themeBtn" class="theme-btn" onclick="toggleTheme()">☀ Terang</button>
+    <button id="logoutBtn" class="theme-btn" onclick="doLogout()" style="display:none">🚪 Logout</button>
     <span id="versionInfo" class="version-tag">v?</span>
   </div>
 </header>
@@ -561,11 +557,8 @@ input[type=checkbox]:checked::after{
   <div class="filter-bar">
     <label><input type="checkbox" id="pauseLog" onchange="updatePauseLog()"> Pause</label>
     <input type="text" id="logSearch" placeholder="Search log..." oninput="filterLog()" style="flex:1;min-width:100px">
-    
-    <!-- FIX: Menambahkan onchange agar tersimpan otomatis -->
     <input type="number" id="logMaxLines" placeholder="Max lines" min="100" style="width:90px" title="Batas baris maksimum di layar" onchange="applyLogSettings()">
     <input type="number" id="logClearMin" placeholder="Auto-clear (mnt)" min="0" style="width:110px" title="0 = tidak pernah clear otomatis" onchange="applyLogSettings()">
-    
     <button class="btn" onclick="clearLogs()">Clear</button>
   </div>
   <div id="logbox">Connecting to log stream...</div>
@@ -591,9 +584,28 @@ input[type=checkbox]:checked::after{
   </div>
 </div>
 
+<!-- MODAL LOGIN (floating) -->
+<div id="loginModal" class="modal-overlay" style="display:none">
+  <div class="modal-card" style="max-width:340px" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <span>🔒 Login Dashboard</span>
+    </div>
+    <div class="modal-body">
+      <div class="hint" style="margin-bottom:8px">Masukkan secret untuk membuka dashboard.</div>
+      <input type="password" id="loginSecret" placeholder="Secret..."
+             style="width:100%;padding:8px;background:var(--bg-elev);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:13px">
+      <div id="loginErr" style="color:var(--red);font-size:11px;margin-top:6px;min-height:16px"></div>
+      <button class="btn btn-primary" style="width:100%;margin-top:8px;justify-content:center" onclick="doLogin()">Masuk</button>
+    </div>
+  </div>
+</div>
+
 <div id="toastContainer"></div>
 
 <script>
+const SOCKSHTTP_AUTHED = __AUTH_FLAG__;
+let SOCKSHTTP_LOCKED = false;
+
 // ============ THEME ============
 function toggleTheme() {
   const cur = document.documentElement.getAttribute('data-theme') || 'dark';
@@ -613,6 +625,23 @@ function initTheme() {
   document.documentElement.setAttribute('data-theme', t);
   updateThemeBtn(t);
 }
+
+// ============ LOGIN (floating modal) ============
+function showLoginModal() {
+  const m = document.getElementById('loginModal');
+  if (m) m.style.display = 'flex';
+  setTimeout(() => { const i = document.getElementById('loginSecret'); if (i) i.focus(); }, 100);
+}
+function hideLoginModal() {
+  const m = document.getElementById('loginModal');
+  if (m) m.style.display = 'none';
+}
+function doLogin() {
+  const v = (document.getElementById('loginSecret').value || '').trim();
+  if (!v) { document.getElementById('loginErr').textContent = 'Isi secret dulu.'; return; }
+  window.location.href = '/?secret=' + encodeURIComponent(v);
+}
+function doLogout() { window.location.href = '/logout'; }
 
 // ============ utils ============
 function esc(s){
@@ -692,7 +721,9 @@ function showTab(name,btn){
 let lastStatus = {};
 async function loadStatus(){
   try{
+    if (SOCKSHTTP_LOCKED) return;
     const r=await fetch('/api/status');
+    if (r.status === 401) { SOCKSHTTP_LOCKED = true; showLoginModal(); return; }
     const d=await r.json();
     lastStatus=d;
     const badge=document.getElementById('stateBadge');
@@ -713,7 +744,7 @@ async function loadStatus(){
       card('⇄','Active',d.active_conns||0,'')+
       card('✓','Closed',d.closed_conns||0,'')+
       card('↻','Reconnects',d.reconnects||0,'small','var(--purple)', reconnSub, 'showReconnectModal()')+
-      card('◇','DNS',d.dns_queries||0,'small','var(--purple)','pool: '+(d.dns_pool?d.dns_pool.size:0));
+      card('◇','DNS',d.dns_queries||0,'small','var(--purple)','cache: '+(d.real_cache?d.real_cache.size:0));
   }catch(e){console.error(e)}
 }
 function card(icon,label,value,extra,accent,sub,onclick){
@@ -724,7 +755,7 @@ function card(icon,label,value,extra,accent,sub,onclick){
   const style2=accentVar?'style="--card-accent:var(--'+accentVar+');--card-icon-bg:var(--'+accentVar+'-bg)"':'';
   const cls='stat-value'+(extra==='accent'?' accent':(extra==='small'?' small':''));
   const clickable = onclick ? ' class="stat-card clickable-card" onclick="'+onclick+'"' : ' class="stat-card"';
-  
+
   let subHtml = '';
   if (sub) {
     if (onclick) {
@@ -772,7 +803,9 @@ function closeReconnectModal(e) {
 // ============ traffic chart ============
 async function loadTraffic(){
   try{
+    if (SOCKSHTTP_LOCKED) return;
     const r=await fetch('/api/traffic');
+    if (r.status === 401) return;
     const d=await r.json();
     drawChart(d.samples||[]);
   }catch(e){}
@@ -804,7 +837,9 @@ function drawChart(samples){
 // ============ devices ============
 async function loadDevices(){
   try{
+    if (SOCKSHTTP_LOCKED) return;
     const r=await fetch('/api/devices');
+    if (r.status === 401) return;
     const d=await r.json();
     const body=document.getElementById('devicesBody');
     if(!d.devices||d.devices.length===0){
@@ -820,7 +855,7 @@ async function loadDevices(){
         '<td class="bytes hide-mobile">'+fmtBytes(dev.down)+'</td>'+
       '</tr>'
     ).join('');
-    
+
     const sel=document.getElementById('filterSrc');
     const cur=sel.value;
     let opts='<option value="">All sources</option>';
@@ -842,7 +877,9 @@ function filterBySrc(ip){
 // ============ proxies ============
 async function loadProxies(){
   try{
+    if (SOCKSHTTP_LOCKED) return;
     const r=await fetch('/api/proxies');
+    if (r.status === 401) return;
     const d=await r.json();
     const c=document.getElementById('groupsContainer');
     if(!d.proxies||d.proxies.length===0){
@@ -863,6 +900,7 @@ async function switchProxy(group,name){
     const r=await fetch('/api/proxies/'+encodeURIComponent(group),{
       method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:name})
     });
+    if(r.status === 401){ SOCKSHTTP_LOCKED = true; showLoginModal(); return; }
     if(!r.ok)throw new Error(await r.text());
     toast(group+' → '+name,'success');
     loadProxies();
@@ -887,7 +925,9 @@ function setConnState(s,btn){
 
 async function loadConnections(){
   try{
+    if (SOCKSHTTP_LOCKED) return;
     const r=await fetch('/api/connections?state='+connState);
+    if (r.status === 401) return;
     const d=await r.json();
     rawConns=d.connections||[];
     applyConnFilter();
@@ -933,7 +973,7 @@ function renderConnections(){
     const t=new Date(c.start); const ts=t.toTimeString().slice(0,8);
     const dst=c.domain||c.dstHost;
     const checked=selectedConns.has(c.id)?'checked':''; const selCls=selectedConns.has(c.id)?'selected':'';
-    
+
     let endCell='';
     if(!isActive){
       const et=c.end?new Date(c.end):null;
@@ -1026,10 +1066,12 @@ function handleQaIPSelect(sel) {
 
 async function loadLimiter(){
   try{
+    if (SOCKSHTTP_LOCKED) return;
     const r=await fetch('/api/limiter');
+    if (r.status === 401) return;
     const d=await r.json();
     document.getElementById('limiterInfo').innerHTML='Status: <b style="color:'+(d.enabled?'var(--green)':'var(--red)')+'">'+(d.enabled?'✅ enabled':'⛔ disabled')+'</b> · File: <code>'+esc(d.file||'(none)')+'</code> · Rules: <b>'+(d.rules?d.rules.length:0)+'</b>';
-    
+
     const body=document.getElementById('limiterBody');
     let html='';
     if(!d.rules||d.rules.length===0){
@@ -1131,19 +1173,12 @@ function initLogSettings() {
 function applyLogSettings() {
   const m = parseInt(document.getElementById('logMaxLines').value);
   const c = parseInt(document.getElementById('logClearMin').value);
-  
-  // Validasi
   logMaxLines = (isNaN(m) || m < 100) ? 2000 : m;
   logClearMin = (isNaN(c) || c < 0) ? 0 : c;
-  
-  // Simpan ke localStorage
   localStorage.setItem('sockshttp_logMaxLines', logMaxLines);
   localStorage.setItem('sockshttp_logClearMin', logClearMin);
-  
-  // Kembalikan nilai tervalidasi ke input
   document.getElementById('logMaxLines').value = logMaxLines;
   document.getElementById('logClearMin').value = logClearMin;
-
   trimLogBuffer();
   scheduleLogClear();
   renderLog();
@@ -1153,7 +1188,7 @@ function applyLogSettings() {
 function clearLogs() {
   logBuffer = '';
   renderLog();
-  scheduleLogClear(); // Reset timer jika auto-clear menyala
+  scheduleLogClear();
 }
 
 function trimLogBuffer() {
@@ -1176,9 +1211,11 @@ function scheduleLogClear() {
 }
 
 function connectLogs(){
+  if (SOCKSHTTP_LOCKED) return;
   if(logSource){logSource.close()}
   const box=document.getElementById('logbox'); logBuffer=''; box.textContent='';
   fetch('/api/logs').then(r=>{
+    if (r.status === 401) { SOCKSHTTP_LOCKED = true; showLoginModal(); return; }
     const reader=r.body.getReader(); const dec=new TextDecoder();
     function read(){
       reader.read().then(res=>{
@@ -1207,18 +1244,35 @@ function renderLog(){
 
 // ============ config ============
 async function loadConfig(){
-  try{ const r=await fetch('/api/config'); const d=await r.json(); document.getElementById('configBox').textContent=JSON.stringify(d,null,2); }catch(e){}
+  try{
+    if (SOCKSHTTP_LOCKED) return;
+    const r=await fetch('/api/config');
+    if (r.status === 401) return;
+    const d=await r.json(); document.getElementById('configBox').textContent=JSON.stringify(d,null,2);
+  }catch(e){}
 }
 
 // ============ bootstrap ============
 initTheme();
-initLogSettings();
-setInterval(loadStatus,1000);
-setInterval(loadTraffic,2000);
-setInterval(loadDevices,3000);
-setInterval(loadProxies,5000);
-setInterval(()=>{if(connState==='active' || document.getElementById('tab-connections').classList.contains('active'))loadConnections();},1000);
-loadStatus(); loadTraffic(); loadDevices(); loadProxies(); loadLimiter();
+if (SOCKSHTTP_AUTHED) {
+    const lb = document.getElementById('logoutBtn');
+    if (lb) lb.style.display = 'flex';
+    initLogSettings();
+    setInterval(loadStatus,1000);
+    setInterval(loadTraffic,2000);
+    setInterval(loadDevices,3000);
+    setInterval(loadProxies,5000);
+    setInterval(()=>{if(connState==='active' || document.getElementById('tab-connections').classList.contains('active'))loadConnections();},1000);
+    loadStatus(); loadTraffic(); loadDevices(); loadProxies(); loadLimiter();
+} else {
+    showLoginModal();
+    if (new URLSearchParams(location.search).has('secret')) {
+        const e = document.getElementById('loginErr');
+        if (e) e.textContent = 'Secret salah, coba lagi.';
+    }
+    const inp = document.getElementById('loginSecret');
+    if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+}
 </script>
 </body>
 </html>`
