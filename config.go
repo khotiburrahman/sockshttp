@@ -94,7 +94,7 @@ type Config struct {
 
 	DNS struct {
 		Enabled  bool   `yaml:"enabled"`
-		Mode     string `yaml:"mode"` // <-- Tambahan: "fakeip" atau "forward"
+		Mode     string `yaml:"mode"` // hanya "forward" yang didukung
 		Bind     string `yaml:"bind"`
 		Upstream string `yaml:"upstream"`
 	} `yaml:"dns"`
@@ -138,7 +138,6 @@ type Config struct {
 	} `yaml:"log"`
 
 	StateFile  string `yaml:"state_file"`
-	FakeIPFile string `yaml:"fakeip_file"`
 	PIDFile    string `yaml:"pid_file"`
 
 	ValidityDate int64 `yaml:"-"`
@@ -164,7 +163,7 @@ func DefaultConfig() *Config {
 	c.SOCKS5.Bind = "127.0.0.1"
 	c.SOCKS5.Port = 7777
 	c.DNS.Enabled = true
-	c.DNS.Mode = "fakeip" // Default mode
+	c.DNS.Mode = "forward"
 	c.DNS.Bind = "0.0.0.0:1053"
 	c.DNS.Upstream = "1.1.1.1:53"
 	c.Redirect.Bind = "127.0.0.1:7892"
@@ -184,7 +183,6 @@ func DefaultConfig() *Config {
 	c.Log.MaxSizeMB = 10
 	c.Log.MaxBackups = 3
 	c.StateFile = "/etc/qtun/run/sockshttp-state.json"
-	c.FakeIPFile = "/etc/qtun/run/sockshttp-fakeip.json.gz"
 	c.PIDFile = "/var/run/sockshttp.pid"
 
 	c.ProxyGroups = []ProxyGroupConfig{
@@ -217,6 +215,19 @@ func LoadYAMLConfig(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse YAML: %w", err)
 	}
+
+	// Validasi mode DNS: hanya "forward" yang didukung.
+	switch strings.ToLower(cfg.DNS.Mode) {
+	case "", "forward":
+		cfg.DNS.Mode = "forward"
+	case "fakeip":
+		fmt.Fprintf(os.Stderr, "WARN: dns.mode='fakeip' tidak lagi didukung, dipaksa ke 'forward'\n")
+		cfg.DNS.Mode = "forward"
+	default:
+		fmt.Fprintf(os.Stderr, "WARN: dns.mode=%q tidak dikenal, dipaksa ke 'forward'\n", cfg.DNS.Mode)
+		cfg.DNS.Mode = "forward"
+	}
+
 	if len(cfg.Rules) > 0 {
 		last := strings.ToUpper(strings.TrimSpace(strings.SplitN(cfg.Rules[len(cfg.Rules)-1], ",", 2)[0]))
 		if last != RuleMatch {
