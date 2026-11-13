@@ -7,7 +7,10 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 type SOCKS5Server struct {
@@ -117,9 +120,6 @@ func (s *SOCKS5Server) handleConn(c net.Conn) {
 	}
 	port := int(binary.BigEndian.Uint16(pb))
 
-	// SOCKS5 selalu resolve via group DEFAULT.
-	// Rule SRC-IP-CIDR tidak berlaku di sini — hanya untuk traffic REDIRECT
-	// dari router karena butuh src IP asli client.
 	target, chain := s.proxyMgr.Resolve("DEFAULT")
 	s.logger.Debug("SOCKS5 %s:%d -> %s (%s)", host, port, target, chain)
 
@@ -133,7 +133,21 @@ func (s *SOCKS5Server) handleConn(c net.Conn) {
 		c.Write([]byte{0x05, 0x02, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		return
 	case ProxyDirect:
-		remote, err = net.DialTimeout("tcp", dest, 10*time.Second)
+		// GUNAKAN SO_MARK UNTUK DIRECT (Bypass Tunnel)
+		dialer := net.Dialer{
+			Timeout: 10 * time.Second,
+			Control: func(network, address string, c syscall.RawConn) error {
+				var opErr error
+				err := c.Control(func(fd uintptr) {
+					opErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, 1)
+				})
+				if err != nil {
+					return err
+				}
+				return opErr
+			},
+		}
+		remote, err = dialer.Dial("tcp", dest)
 	case ProxyTunnel:
 		remote, err = s.tunnel.Dial("tcp", dest)
 	default:
