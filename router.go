@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -607,8 +608,6 @@ func (r *Router) handleConn(raw net.Conn) {
 	host, portStr, _ := net.SplitHostPort(dstAddr)
 	port, _ := strconv.Atoi(portStr)
 
-	// Forward-only: dstIP selalu IP asli. realCache hanya menambah
-	// informasi hostname kalau IP itu pernah di-resolve via tunnel.
 	dstIP := host
 	domain := ""
 	if d, ok := r.realCache.Lookup(host); ok {
@@ -637,7 +636,23 @@ func (r *Router) handleConn(raw net.Conn) {
 		if domain != "" {
 			target = net.JoinHostPort(domain, strconv.Itoa(port))
 		}
-		remote, err := net.DialTimeout("tcp", target, 10*time.Second)
+		
+		// GUNAKAN SO_MARK UNTUK DIRECT (Bypass Tunnel)
+		dialer := net.Dialer{
+			Timeout: 10 * time.Second,
+			Control: func(network, address string, c syscall.RawConn) error {
+				var opErr error
+				err := c.Control(func(fd uintptr) {
+					opErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, 1)
+				})
+				if err != nil {
+					return err
+				}
+				return opErr
+			},
+		}
+		remote, err := dialer.Dial("tcp", target)
+
 		if err != nil {
 			defaultReason = "dial-failed"
 			return
@@ -662,7 +677,7 @@ func (r *Router) handleConn(raw net.Conn) {
 	}
 }
 
-// pipe — TIDAK DIUBAH. Limiter tetap di-wrap selalu saat enabled.
+// pipe — TIDAK DIUBAH
 func (r *Router) pipe(a, b net.Conn, track *Connection) {
 	track.AddConn(a)
 	track.AddConn(b)
