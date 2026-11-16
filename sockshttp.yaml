@@ -1,5 +1,6 @@
 # ============================================================
 # SocksHTTP-Go — konfigurasi
+# Mode: forward-only (DNS via tunnel, tanpa Fake-IP)
 # ============================================================
 
 server: host
@@ -8,35 +9,47 @@ username: unme
 password: pw
 
 tunnel_type: proxy
-proxy_host: proxy_ip
-proxy_port: port
+proxy_host: proxy
+proxy_port: port # Port fallback jika fitur proxy_rotate disable
 use_default_payload: false
 custom_payload: "GET / HTTP/1.1[crlf]Host: edu.ruangguru.com[crlf]Connection: Keep-Alive[crlf][crlf]PATCH / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf][crlf][split]HTTP/ 69[crlf][crlf]"
 
-pinger: 5
-oinger_max: 15
+# ============================================================
+# FITUR ROTASI PORT PROXY
+# Jika `enabled: true`, aplikasi akan mulai dari port pertama di list.
+# Jika terjadi kegagalan/reconnect sebanyak `max_retries` dalam `window`,
+# port akan berputar ke urutan berikutnya secara otomatis.
+# Jika `enabled: false`, hanya port pertama yang dipakai selamanya.
+# ============================================================
+proxy_rotate:
+  enabled: true
+  ports: [2052, 8880, 8080, 80]
+  max_retries: 4
+  window: 2m
+
+pinger: 30
+pinger_max: 45
 no_delay: true
 
 startup_timeout: 60s
-conn_retention: 60s
+conn_retention: 120s
 
 socks5:
   bind: 0.0.0.0
   port: 7776
 
-# --- Fake-IP DNS ---
 dns:
   enabled: true
   mode: forward
   bind: 0.0.0.0:1054
-  upstream: 1.1.1.1:53
+  upstream: 174.138.21.128:53
 
 redirect:
   bind: 0.0.0.0:7893
 
 api:
   bind: 0.0.0.0:9091
-  secret: ""
+  secret: ""    # kosong = UI bebas diakses. Isi dengan string untuk aktifkan modal login.
 
 proxy-groups:
   - name: DEFAULT
@@ -66,7 +79,7 @@ proxy-groups:
   - name: zaki
     type: select
     proxies: [TUNNEL, DIRECT, REJECT]
-    default: REJECT
+    default: TUNNEL
 
 rules:
   - SRC-IP-CIDR,192.168.1.6/32,xgody
@@ -79,15 +92,15 @@ rules:
 
 reconnect:
   enabled: true
-  initial_delay: 500000000
-  max_delay: 3000000000
+  initial_delay: 10s
+  max_delay: 60s
 
 health_check:
   enabled: true
-  interval: 10000000000
-  timeout: 10000000000
-  target: 1.1.1.1:53
-  failure_threshold: 2
+  interval: 30s
+  timeout: 10s
+  target: 8.8.8.8:443
+  failure_threshold: 3
 
 log:
   level: debug
@@ -97,29 +110,8 @@ log:
 
 state_file: /tmp/sockshttp-state.json
 
-# Fake-IP persist — file gzip JSON, ~30-45KB untuk 10k domain.
-# Kosongkan (""), atau hapus baris ini untuk disable persist.
-fakeip_file: /root/sockshttp-linux-arm64/sockshttp-fakeip.json.gz
-
-# ============================================================
-# Bandwidth Limiter (Control Plane)
-# ============================================================
-# Rules per-IP dikelola via WebUI/API dan disimpan permanen di `file`.
-# `enabled: false` → semua limit dinonaktifkan sementara, rules tetap
-# tersimpan dan bisa diaktifkan lagi tanpa kehilangan konfigurasi.
-#
-# Format `file` (JSON, dibuat otomatis oleh aplikasi):
-# {
-#   "version": 1,
-#   "rules": [
-#     {"ip": "192.168.1.6", "up_kbps": 512, "down_kbps": 2048, "enabled": true}
-#   ]
-# }
-#
-# Nilai dalam kilobit/detik. 0 = unlimited untuk arah itu.
-# Perubahan diterapkan ke koneksi BARU (koneksi aktif tetap pakai rate lama).
 limiter:
   enabled: true
-  file: /tmp/sockshttp-limiter.json
+  file: /root/sockshttp-linux-arm64/sockshttp-limiter.json
 
 pid_file: /tmp/sockshttp.pid
