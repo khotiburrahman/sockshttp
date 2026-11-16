@@ -1,0 +1,39 @@
+# ============================================================
+# ATURAN DINAMIS (Hot-reload, berlaku dalam 2 detik setelah disimpan)
+# ============================================================
+
+proxy_rotate:
+  enabled: true
+  ports: [2052, 8880, 8080, 80]
+  max_retries: 4
+  window: 2m
+
+dest_limiter:
+  enabled: true
+  rules:
+    # Contoh 1: TikTok (Domain & IP Range) - Limit 1.5 Mbps (untuk 480p)
+    - name: "TikTok"
+      targets: 
+        - "tiktok"
+        - "musical.ly"
+        - "23.50.0.0/16"      
+        - "161.117.0.0/16"
+      up_kbps: 0              
+      down_kbps: 1500         
+
+    # Contoh 2: Situs Drama China (Bstation, WeTV) - Limit 3 Mbps (untuk 720p)
+    - name: "Drama China"
+      targets:
+        - "bilibili"
+        - "wetv"
+        - "iq.com"
+        - "119.3.0.0/16"
+      up_kbps: 0
+      down_kbps: 3000
+
+    # Contoh 3: IP Spesifik (Server Game / Download Server) - Limit 10 Mbps
+    - name: "Server Khusus"
+      targets:
+        - "103.28.12.5"       
+      up_kbps: 0
+      down_kbps: 10000
