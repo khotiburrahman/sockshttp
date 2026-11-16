@@ -80,6 +80,14 @@ type Config struct {
 	UseDefaultPayload bool     `yaml:"use_default_payload"`
 	CustomPayload     string   `yaml:"custom_payload"`
 
+	// Fitur Rotasi Port Proxy
+	ProxyRotate struct {
+		Enabled    bool     `yaml:"enabled"`
+		Ports      []int    `yaml:"ports"`
+		MaxRetries int      `yaml:"max_retries"`
+		Window     Duration `yaml:"window"`
+	} `yaml:"proxy_rotate"`
+
 	Pinger    int  `yaml:"pinger"`
 	PingerMax int  `yaml:"pinger_max"`
 	NoDelay   bool `yaml:"no_delay"`
@@ -154,8 +162,8 @@ func DefaultConfig() *Config {
 	c := &Config{
 		ServerPort:     22,
 		TunnelType:     "direct",
-		Pinger:         5,
-		PingerMax:      15,
+		Pinger:         30,
+		PingerMax:      45,
 		NoDelay:        true,
 		StartupTimeout: Duration(60 * time.Second),
 		ConnRetention:  Duration(60 * time.Second),
@@ -169,12 +177,12 @@ func DefaultConfig() *Config {
 	c.Redirect.Bind = "127.0.0.1:7892"
 	c.API.Bind = "0.0.0.0:9090"
 	c.Reconnect.Enabled = true
-	c.Reconnect.InitialDelay = Duration(5 * time.Second)
+	c.Reconnect.InitialDelay = Duration(10 * time.Second)
 	c.Reconnect.MaxDelay = Duration(60 * time.Second)
 	c.HealthCheck.Enabled = true
 	c.HealthCheck.Interval = Duration(30 * time.Second)
 	c.HealthCheck.Timeout = Duration(10 * time.Second)
-	c.HealthCheck.Target = "1.1.1.1:53"
+	c.HealthCheck.Target = "8.8.8.8:443"
 	c.HealthCheck.FailureThreshold = 3
 	c.Limiter.Enabled = false
 	c.Limiter.File = "/tmp/sockshttp-limiter.json"
@@ -185,22 +193,20 @@ func DefaultConfig() *Config {
 	c.StateFile = "/etc/qtun/run/sockshttp-state.json"
 	c.PIDFile = "/var/run/sockshttp.pid"
 
+	// Default Rotasi Port
+	c.ProxyRotate.Enabled = false
+	c.ProxyRotate.Ports = []int{2052, 8880, 8080, 80}
+	c.ProxyRotate.MaxRetries = 4
+	c.ProxyRotate.Window = Duration(2 * time.Minute)
+
 	c.ProxyGroups = []ProxyGroupConfig{
 		{Name: "DEFAULT", Type: "select", Proxies: []string{ProxyTunnel, ProxyDirect, ProxyReject}, Default: ProxyTunnel},
-		{Name: "HP-ISTRI", Type: "select", Proxies: []string{ProxyTunnel, ProxyDirect, ProxyReject}, Default: ProxyTunnel},
-		{Name: "LAPTOP-KERJA", Type: "select", Proxies: []string{ProxyTunnel, ProxyDirect, ProxyReject}, Default: ProxyTunnel},
-		{Name: "TV-ANDROID", Type: "select", Proxies: []string{ProxyTunnel, ProxyDirect, ProxyReject}, Default: ProxyTunnel},
-		{Name: "IOT-CAMERA", Type: "select", Proxies: []string{ProxyTunnel, ProxyDirect, ProxyReject}, Default: ProxyDirect},
 	}
 	c.Rules = []string{
 		"IP-CIDR,127.0.0.0/8,DIRECT,no-resolve",
 		"IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
 		"IP-CIDR,172.16.0.0/12,DIRECT,no-resolve",
 		"IP-CIDR,192.168.0.0/16,DIRECT,no-resolve",
-		"SRC-IP-CIDR,192.168.1.100/32,HP-ISTRI",
-		"SRC-IP-CIDR,192.168.1.101/32,LAPTOP-KERJA",
-		"SRC-IP-CIDR,192.168.1.150/32,TV-ANDROID",
-		"SRC-IP-CIDR,192.168.1.200/32,IOT-CAMERA",
 		"MATCH,DEFAULT",
 	}
 	return c
@@ -216,7 +222,6 @@ func LoadYAMLConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse YAML: %w", err)
 	}
 
-	// Validasi mode DNS: hanya "forward" yang didukung.
 	switch strings.ToLower(cfg.DNS.Mode) {
 	case "", "forward":
 		cfg.DNS.Mode = "forward"
