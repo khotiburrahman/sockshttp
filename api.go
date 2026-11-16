@@ -118,8 +118,6 @@ func (a *APIServer) Start() error {
 	return nil
 }
 
-// authOK — cek header X-Secret, query ?secret=, atau cookie.
-// Kalau API.Secret kosong, siapa saja boleh akses.
 func (a *APIServer) authOK(r *http.Request) bool {
 	if a.cfg.API.Secret == "" {
 		return true
@@ -166,6 +164,7 @@ func (a *APIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"state":             a.tunnel.State(),
 		"uptime_sec":        int(time.Since(a.start).Seconds()),
 		"server":            fmt.Sprintf("%s:%d", a.cfg.Server, a.cfg.ServerPort),
+		"proxy_port":        a.tunnel.GetCurrentPort(), // <-- Info Port Rotasi
 		"reconnects":        a.tunnel.reconnect.Load(),
 		"last_reconnect":    a.tunnel.lastReconnect.Load(),
 		"reconnect_history": hist,
@@ -369,8 +368,6 @@ func (a *APIServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ============ Limiter API (tidak berubah) ============
-
 func (a *APIServer) handleLimiter(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
@@ -418,10 +415,7 @@ func (a *APIServer) handleLimiterAction(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
 
-// ============ Auth / UI ============
-
 func (a *APIServer) handleUI(w http.ResponseWriter, r *http.Request) {
-	// Kalau ?secret=xxx cocok → set cookie, redirect ke / bersih
 	if a.cfg.API.Secret != "" {
 		if sec := r.URL.Query().Get("secret"); sec != "" &&
 			subtle.ConstantTimeCompare([]byte(sec), []byte(a.cfg.API.Secret)) == 1 {
