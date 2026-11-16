@@ -92,6 +92,12 @@ type SSHTunnel struct {
 
 	reconnMu         sync.Mutex
 	reconnectHistory []int64
+
+	// Fitur Rotasi Port
+	proxyPortMu sync.Mutex
+	currentPort int
+	portIndex   int
+	connHistory []time.Time
 }
 
 func NewSSHTunnel(cfg *Config, logger *Logger) *SSHTunnel {
@@ -101,7 +107,60 @@ func NewSSHTunnel(cfg *Config, logger *Logger) *SSHTunnel {
 		disconCh: make(chan error, 1),
 	}
 	t.state.Store("disconnected")
+
+	// Inisialisasi Port berdasarkan YAML (Selalu ambil index pertama)
+	t.proxyPortMu.Lock()
+	if len(cfg.ProxyRotate.Ports) > 0 {
+		t.currentPort = cfg.ProxyRotate.Ports[0]
+		t.portIndex = 0
+	} else {
+		t.currentPort = cfg.ProxyPort
+	}
+	t.proxyPortMu.Unlock()
+
 	return t
+}
+
+func (t *SSHTunnel) GetCurrentPort() int {
+	t.proxyPortMu.Lock()
+	defer t.proxyPortMu.Unlock()
+	return t.currentPort
+}
+
+func (t *SSHTunnel) trackReconnectAndRotate() {
+	if !t.cfg.ProxyRotate.Enabled || len(t.cfg.ProxyRotate.Ports) <= 1 {
+		return
+	}
+
+	t.proxyPortMu.Lock()
+	defer t.proxyPortMu.Unlock()
+
+	window := t.cfg.ProxyRotate.Window.D()
+	if window <= 0 {
+		window = 2 * time.Minute
+	}
+	maxRetries := t.cfg.ProxyRotate.MaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 4
+	}
+
+	now := time.Now()
+	var validHistory []time.Time
+	for _, ts := range t.connHistory {
+		if now.Sub(ts) <= window {
+			validHistory = append(validHistory, ts)
+		}
+	}
+	validHistory = append(validHistory, now)
+	t.connHistory = validHistory
+
+	if len(t.connHistory) >= maxRetries {
+		oldPort := t.currentPort
+		t.portIndex = (t.portIndex + 1) % len(t.cfg.ProxyRotate.Ports)
+		t.currentPort = t.cfg.ProxyRotate.Ports[t.portIndex]
+		t.logger.Warn("[tunnel] Terdeteksi %d kegagalan dalam %v. Rotasi port proxy: %d -> %d", len(t.connHistory), window, oldPort, t.currentPort)
+		t.connHistory = nil // Reset riwayat setelah rotasi
+	}
 }
 
 func (t *SSHTunnel) State() string { return t.state.Load().(string) }
@@ -150,13 +209,11 @@ func (t *SSHTunnel) buildAuth() ([]ssh.AuthMethod, error) {
 	return auths, nil
 }
 
-// resolveHost dengan strategi multi-stage (DNS Sistem -> DNS Publik -> IP Fallback)
 func (t *SSHTunnel) resolveHost(hostname string) []string {
 	if net.ParseIP(hostname) != nil {
 		return []string{hostname}
 	}
 
-	// 1. Coba DNS Sistem (ISP)
 	t.logger.Debug("[resolve] Mencoba DNS Sistem untuk %s...", hostname)
 	ips, err := net.LookupHost(hostname)
 	if err == nil && len(ips) > 0 {
@@ -164,7 +221,6 @@ func (t *SSHTunnel) resolveHost(hostname string) []string {
 		return ips
 	}
 
-	// 2. Coba DNS Publik (1.1.1.1)
 	t.logger.Debug("[resolve] DNS Sistem gagal, mencoba via 1.1.1.1...")
 	resolver := &net.Resolver{
 		PreferGo: true,
@@ -181,7 +237,6 @@ func (t *SSHTunnel) resolveHost(hostname string) []string {
 		return ips
 	}
 
-	// 3. Fallback IP (jika didaftarkan di YAML)
 	t.logger.Warn("[resolve] Semua DNS gagal untuk %s", hostname)
 	if len(t.cfg.ProxyHostFallback) > 0 {
 		t.logger.Warn("[resolve] Menggunakan IP Fallback Darurat: %v", t.cfg.ProxyHostFallback)
@@ -191,7 +246,6 @@ func (t *SSHTunnel) resolveHost(hostname string) []string {
 	return []string{hostname}
 }
 
-// openRawConn membuka koneksi mentah dan mencoba setiap IP jika gagal (Failover)
 func (t *SSHTunnel) openRawConn() (net.Conn, error) {
 	var payload string
 	var readResponse bool
@@ -200,7 +254,7 @@ func (t *SSHTunnel) openRawConn() (net.Conn, error) {
 
 	if t.cfg.TunnelType == "proxy" {
 		targetHost = t.cfg.ProxyHost
-		targetPort = t.cfg.ProxyPort
+		targetPort = t.GetCurrentPort() // Menggunakan port dinamis
 		if t.cfg.UseDefaultPayload {
 			payload = fmt.Sprintf("CONNECT %s:%d HTTP/1.0\r\n\r\n", t.cfg.Server, t.cfg.ServerPort)
 		} else {
@@ -529,6 +583,7 @@ func (t *SSHTunnel) Run(ctx context.Context) {
 		if err := t.dialOnce(); err != nil {
 			t.logger.Error("Dial gagal: %v", err)
 			t.lastErr.Store(err.Error())
+			t.trackReconnectAndRotate()
 			t.waitBackoff(ctx, &backoff)
 			continue
 		}
@@ -562,6 +617,8 @@ func (t *SSHTunnel) Run(ctx context.Context) {
 				t.reconnectHistory = t.reconnectHistory[1:]
 			}
 			t.reconnMu.Unlock()
+			
+			t.trackReconnectAndRotate()
 		}
 
 		if !t.cfg.Reconnect.Enabled {
