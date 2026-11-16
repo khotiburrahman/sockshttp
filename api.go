@@ -28,6 +28,7 @@ type APIServer struct {
 	router    *Router
 	limiter   *BandwidthLimiter
 	realCache *RealIPCache
+	dynRules  *DynamicRules
 	start     time.Time
 	srv       *http.Server
 	done      chan struct{}
@@ -41,12 +42,20 @@ type APIServer struct {
 	maxTraffic int
 }
 
-func NewAPIServer(cfg *Config, logger *Logger, tunnel *SSHTunnel, pm *ProxyManager, tr *ConnTracker, dns *DNSServer, router *Router, limiter *BandwidthLimiter, realCache *RealIPCache) *APIServer {
+func NewAPIServer(cfg *Config, logger *Logger, tunnel *SSHTunnel, pm *ProxyManager, tr *ConnTracker, dns *DNSServer, router *Router, limiter *BandwidthLimiter, realCache *RealIPCache, dynRules *DynamicRules) *APIServer {
 	a := &APIServer{
-		cfg: cfg, logger: logger, tunnel: tunnel,
-		proxyMgr: pm, tracker: tr, dns: dns, router: router, limiter: limiter,
+		cfg:       cfg,
+		logger:    logger,
+		tunnel:    tunnel,
+		proxyMgr:  pm,
+		tracker:   tr,
+		dns:       dns,
+		router:    router,
+		limiter:   limiter,
 		realCache: realCache,
-		start:     time.Now(), done: make(chan struct{}),
+		dynRules:  dynRules,
+		start:     time.Now(),
+		done:      make(chan struct{}),
 		maxTraffic: 120,
 	}
 	go a.rateSampler()
@@ -67,12 +76,8 @@ func (a *APIServer) rateSampler() {
 		totalDown := a.tracker.TotalDown.Load()
 		up := totalUp - lastUp
 		down := totalDown - lastDown
-		if up < 0 {
-			up = 0
-		}
-		if down < 0 {
-			down = 0
-		}
+		if up < 0 { up = 0 }
+		if down < 0 { down = 0 }
 		lastUp = totalUp
 		lastDown = totalDown
 		a.speedMu.Lock()
@@ -164,7 +169,7 @@ func (a *APIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"state":             a.tunnel.State(),
 		"uptime_sec":        int(time.Since(a.start).Seconds()),
 		"server":            fmt.Sprintf("%s:%d", a.cfg.Server, a.cfg.ServerPort),
-		"proxy_port":        a.tunnel.GetCurrentPort(), // <-- Info Port Rotasi
+		"proxy_port":        a.tunnel.GetCurrentPort(), // Info Port Rotasi Aktif
 		"reconnects":        a.tunnel.reconnect.Load(),
 		"last_reconnect":    a.tunnel.lastReconnect.Load(),
 		"reconnect_history": hist,
@@ -348,6 +353,10 @@ func (a *APIServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 func (a *APIServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	
+	// Ambil info dari dynamic rules untuk ditampilkan di UI
+	rotateEnabled, rotatePorts, rotateMax, rotateWin := a.dynRules.GetProxyRotate()
+
 	json.NewEncoder(w).Encode(map[string]any{
 		"version":         Version,
 		"server":          fmt.Sprintf("%s:%d", a.cfg.Server, a.cfg.ServerPort),
@@ -363,6 +372,15 @@ func (a *APIServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"limiter": map[string]any{
 			"enabled": a.cfg.Limiter.Enabled,
 			"file":    a.cfg.Limiter.File,
+		},
+		"dynamic_rules": map[string]any{
+			"file": a.cfg.DynamicRulesFile,
+			"proxy_rotate": map[string]any{
+				"enabled":     rotateEnabled,
+				"ports":       rotatePorts,
+				"max_retries": rotateMax,
+				"window":      rotateWin.String(),
+			},
 		},
 		"rules": a.cfg.Rules,
 	})
