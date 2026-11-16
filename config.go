@@ -76,17 +76,11 @@ type Config struct {
 	TunnelType        string   `yaml:"tunnel_type"`
 	ProxyHost         string   `yaml:"proxy_host"`
 	ProxyHostFallback []string `yaml:"proxy_host_fallback"`
-	ProxyPort         int      `yaml:"proxy_port"`
+	ProxyPort         int      `yaml:"proxy_port"` // Port fallback jika proxy_rotate disabled
 	UseDefaultPayload bool     `yaml:"use_default_payload"`
 	CustomPayload     string   `yaml:"custom_payload"`
 
-	// Fitur Rotasi Port Proxy
-	ProxyRotate struct {
-		Enabled    bool     `yaml:"enabled"`
-		Ports      []int    `yaml:"ports"`
-		MaxRetries int      `yaml:"max_retries"`
-		Window     Duration `yaml:"window"`
-	} `yaml:"proxy_rotate"`
+	DynamicRulesFile string `yaml:"dynamic_rules_file"`
 
 	Pinger    int  `yaml:"pinger"`
 	PingerMax int  `yaml:"pinger_max"`
@@ -102,7 +96,7 @@ type Config struct {
 
 	DNS struct {
 		Enabled  bool   `yaml:"enabled"`
-		Mode     string `yaml:"mode"` // hanya "forward" yang didukung
+		Mode     string `yaml:"mode"`
 		Bind     string `yaml:"bind"`
 		Upstream string `yaml:"upstream"`
 	} `yaml:"dns"`
@@ -192,12 +186,7 @@ func DefaultConfig() *Config {
 	c.Log.MaxBackups = 3
 	c.StateFile = "/etc/qtun/run/sockshttp-state.json"
 	c.PIDFile = "/var/run/sockshttp.pid"
-
-	// Default Rotasi Port
-	c.ProxyRotate.Enabled = false
-	c.ProxyRotate.Ports = []int{2052, 8880, 8080, 80}
-	c.ProxyRotate.MaxRetries = 4
-	c.ProxyRotate.Window = Duration(2 * time.Minute)
+	c.DynamicRulesFile = "dynamic_rules.yaml"
 
 	c.ProxyGroups = []ProxyGroupConfig{
 		{Name: "DEFAULT", Type: "select", Proxies: []string{ProxyTunnel, ProxyDirect, ProxyReject}, Default: ProxyTunnel},
