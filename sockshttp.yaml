@@ -14,18 +14,8 @@ proxy_port: port # Port fallback jika fitur proxy_rotate disable
 use_default_payload: false
 custom_payload: "GET / HTTP/1.1[crlf]Host: edu.ruangguru.com[crlf]Connection: Keep-Alive[crlf][crlf]PATCH / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf][crlf][split]HTTP/ 69[crlf][crlf]"
 
-# ============================================================
-# FITUR ROTASI PORT PROXY
-# Jika `enabled: true`, aplikasi akan mulai dari port pertama di list.
-# Jika terjadi kegagalan/reconnect sebanyak `max_retries` dalam `window`,
-# port akan berputar ke urutan berikutnya secara otomatis.
-# Jika `enabled: false`, hanya port pertama yang dipakai selamanya.
-# ============================================================
-proxy_rotate:
-  enabled: true
-  ports: [2052, 8880, 8080, 80]
-  max_retries: 4
-  window: 2m
+# File dinamis (Hot-reload)
+dynamic_rules_file: "/root/sockshttp-linux-arm64/dynamic_rules.yaml"
 
 pinger: 30
 pinger_max: 45
