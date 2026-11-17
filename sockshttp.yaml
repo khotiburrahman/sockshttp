@@ -92,6 +92,21 @@ health_check:
   target: 8.8.8.8:443
   failure_threshold: 3
 
+# Hook ketika koneksi internet dari router terdeteksi mati.
+# Script dijalankan setelah probe gagal `ping_count` kali berturut-turut.
+failure_hook:
+  enabled: false
+  script: "/root/reboot-modem.sh"   # path absolut ke script
+  shell: "/bin/sh"                  # default /bin/sh (portable OpenWrt); bisa /bin/bash
+  probe: ping                       # "ping" atau "tcp"
+  target: "8.8.8.8"                 # untuk tcp: "8.8.8.8:443"
+  ping_count: 3                     # gagal berturut-turut untuk trigger
+  interval: 10s                     # jeda antar probe
+  probe_timeout: 5s                 # timeout tiap probe
+  script_timeout: 30s               # timeout eksekusi script
+  cooldown: 5m                      # jeda minimal antar eksekusi
+  once_per_outage: false            # true = sekali per outage (cocok untuk reboot modem)
+
 log:
   level: debug
   file: /tmp/sockshttp.log
