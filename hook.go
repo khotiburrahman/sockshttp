@@ -184,6 +184,10 @@ func (h *FailureHook) runScript(parent context.Context, reason string) {
 	cctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
+argv := make([]string, 0, 1+len(h.cfg.ScriptArgs))
+	argv = append(argv, script)
+	argv = append(argv, h.cfg.ScriptArgs...)
+
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(cctx, shell, script)
 	cmd.Stdout = &stdout
@@ -194,7 +198,7 @@ func (h *FailureHook) runScript(parent context.Context, reason string) {
 		"HOOK_PROBE="+h.probeType(),
 	)
 
-	h.logger.Warn("[hook] menjalankan %s %s (reason=%s)", shell, script, reason)
+	h.logger.Warn("[hook] menjalankan %s %s (reason=%s)", shell, strings.Join(argv, " "), reason)
 	start := time.Now()
 	err := cmd.Run()
 	dur := time.Since(start)
