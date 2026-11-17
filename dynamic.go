@@ -162,11 +162,12 @@ func (d *DynamicRules) StartWatcher(ctx context.Context) {
 	}()
 }
 
-func (d *DynamicRules) GetDestLimits(ip, domain string) (upRate, downRate float64) {
+// Ubah signature function menjadi seperti ini
+func (d *DynamicRules) GetDestLimits(ip, domain string) (ruleID string, upRate, downRate float64) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	if !d.destEnabled {
-		return 0, 0
+		return "", 0, 0
 	}
 
 	dl := strings.ToLower(domain)
@@ -188,11 +189,12 @@ func (d *DynamicRules) GetDestLimits(ip, domain string) (upRate, downRate float6
 				}
 			}
 			if match {
-				return r.upBucketRate, r.downBucketRate
+				// Kembalikan nama aturan (ruleID) beserta limitnya
+				return r.name, r.upBucketRate, r.downBucketRate
 			}
 		}
 	}
-	return 0, 0
+	return "", 0, 0
 }
 
 func (d *DynamicRules) GetProxyRotate() (bool, []int, int, time.Duration) {
