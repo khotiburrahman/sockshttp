@@ -95,14 +95,13 @@ health_check:
 failure_hook:
   enabled: true
   script: "/root/E5573/login.sh"
-  script_args: ["ganti-ip"]
+  script_args: ["ganti-ip"]     # <--- WAJIB pakai kurung siku
   shell: "/bin/sh"
-  probe: ping
-  target: "8.8.8.8"
-  ping_count: 3
-  interval: 10s
-  probe_timeout: 5s
-  script_timeout: 60s
+  check_interval: 5s
+  max_reconnects: 3
+  reconnect_window: 1m
+  max_downtime: 2m
+  script_timeout: 120s
   cooldown: 10m
   once_per_outage: true
 
