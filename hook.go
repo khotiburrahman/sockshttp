@@ -4,32 +4,30 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
-	"strconv"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-// FailureHook menjalankan script shell ketika probe (ping/tcp) gagal
-// berturut-turut sebanyak PingCount kali.
 type FailureHook struct {
 	cfg    FailureHookConfig
 	logger *Logger
+	tunnel *SSHTunnel
 
-	mu         sync.Mutex
-	failStreak int
-	inOutage   bool // sudah pernah trigger, belum recovery
+	mu        sync.Mutex
+	downSince time.Time
+	inOutage  bool
 
-	lastRun atomic.Int64 // unix seconds; 0 = belum pernah
+	lastRun atomic.Int64
 	running atomic.Bool
 }
 
-func NewFailureHook(cfg FailureHookConfig, logger *Logger) *FailureHook {
-	h := &FailureHook{cfg: cfg, logger: logger}
+func NewFailureHook(cfg FailureHookConfig, logger *Logger, tunnel *SSHTunnel) *FailureHook {
+	h := &FailureHook{cfg: cfg, logger: logger, tunnel: tunnel}
 	if !cfg.Enabled {
 		return h
 	}
@@ -46,17 +44,13 @@ func (h *FailureHook) Start(ctx context.Context) {
 		h.logger.Info("[hook] disabled via config")
 		return
 	}
-	interval := h.cfg.Interval.D()
+	interval := h.cfg.CheckInterval.D()
 	if interval < time.Second {
-		interval = 10 * time.Second
-	}
-	need := h.cfg.PingCount
-	if need < 1 {
-		need = 3
+		interval = 5 * time.Second
 	}
 
-	h.logger.Info("[hook] aktif — probe=%s target=%s count=%d interval=%s",
-		h.probeType(), h.target(), need, interval)
+	h.logger.Info("[hook] aktif — monitor tunnel (cek=%s, max_down=%s, max_reconn=%dx/%s)",
+		interval, h.cfg.MaxDowntime.D(), h.cfg.MaxReconnects, h.cfg.ReconnectWindow.D())
 
 	go func() {
 		tk := time.NewTicker(interval)
@@ -67,90 +61,76 @@ func (h *FailureHook) Start(ctx context.Context) {
 				return
 			case <-tk.C:
 			}
-			h.tick(ctx, need)
+			h.tick(ctx)
 		}
 	}()
 }
 
-func (h *FailureHook) probeType() string {
-	p := strings.ToLower(strings.TrimSpace(h.cfg.Probe))
-	if p == "" {
-		return "ping"
-	}
-	return p
-}
+func (h *FailureHook) tick(ctx context.Context) {
+	state := h.tunnel.State()
 
-func (h *FailureHook) target() string {
-	if h.cfg.Target != "" {
-		return h.cfg.Target
-	}
-	if h.probeType() == "tcp" {
-		return "8.8.8.8:443"
-	}
-	return "8.8.8.8"
-}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 
-func (h *FailureHook) tick(ctx context.Context, need int) {
-	if h.probe(ctx) {
-		h.mu.Lock()
-		wasOutage := h.inOutage
-		h.failStreak = 0
+	// 1. Jika tunnel sudah tersambung, reset status
+	if state == "connected" {
+		if h.inOutage {
+			h.logger.Info("[hook] koneksi tunnel pulih")
+		}
 		h.inOutage = false
-		h.mu.Unlock()
-		if wasOutage {
-			h.logger.Info("[hook] koneksi pulih")
-		}
+		h.downSince = time.Time{}
 		return
 	}
 
-	h.mu.Lock()
-	h.failStreak++
-	streak := h.failStreak
-	skip := h.inOutage && h.cfg.OncePerOutage
-	h.mu.Unlock()
-
-	h.logger.Warn("[hook] probe ke %s gagal (%d/%d)", h.target(), streak, need)
-	if streak < need || skip {
+	// Jika sudah pernah trigger dan mode OncePerOutage, diam saja sampai pulih
+	if h.inOutage && h.cfg.OncePerOutage {
 		return
 	}
 
-	h.runScript(ctx, "probe-failed")
-
-	h.mu.Lock()
-	h.inOutage = true
-	h.failStreak = 0
-	h.mu.Unlock()
-}
-
-func (h *FailureHook) probe(ctx context.Context) bool {
-	timeout := h.cfg.ProbeTimeout.D()
-	if timeout <= 0 {
-		timeout = 5 * time.Second
+	// 2. Catat mulai kapan tunnel "down" (connecting/disconnected)
+	if h.downSince.IsZero() {
+		h.downSince = time.Now()
 	}
 
-	if h.probeType() == "tcp" {
-		d := net.Dialer{Timeout: timeout}
-		pctx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-		conn, err := d.DialContext(pctx, "tcp", h.target())
-		if err != nil {
-			return false
+	downtime := time.Since(h.downSince)
+
+	// 3. Cek Kondisi A: Terlalu lama tidak tersambung (Misal: > 2 Menit)
+	if h.cfg.MaxDowntime.D() > 0 && downtime >= h.cfg.MaxDowntime.D() {
+		h.logger.Warn("[hook] Tunnel sudah %s tidak tersambung (max %s)", downtime.Round(time.Second), h.cfg.MaxDowntime.D())
+		h.execute(ctx, fmt.Sprintf("downtime-%s", downtime.Round(time.Second)))
+		h.inOutage = true
+		return
+	}
+
+	// 4. Cek Kondisi B: Terlalu banyak reconnect dalam rentang waktu (Misal: 3x dalam 1 Menit)
+	if h.cfg.MaxReconnects > 0 && h.cfg.ReconnectWindow.D() > 0 {
+		h.tunnel.reconnMu.Lock()
+		// Copy slice agar aman dari race condition saat diakses di luar lock
+		hist := make([]int64, len(h.tunnel.reconnectHistory))
+		copy(hist, h.tunnel.reconnectHistory)
+		h.tunnel.reconnMu.Unlock()
+
+		now := time.Now()
+		recent := 0
+		// Baca dari belakang (waktu paling baru)
+		for i := len(hist) - 1; i >= 0; i-- {
+			if now.Sub(time.Unix(hist[i], 0)) <= h.cfg.ReconnectWindow.D() {
+				recent++
+			} else {
+				break
+			}
 		}
-		conn.Close()
-		return true
-	}
 
-	secs := int(timeout.Seconds())
-	if secs < 1 {
-		secs = 2
+		if recent >= h.cfg.MaxReconnects {
+			h.logger.Warn("[hook] Terdeteksi %d reconnect dalam %s terakhir", recent, h.cfg.ReconnectWindow.D())
+			h.execute(ctx, fmt.Sprintf("reconnect-spam-%dx", recent))
+			h.inOutage = true
+			return
+		}
 	}
-	pctx, cancel := context.WithTimeout(ctx, timeout+2*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(pctx, "ping", "-c", "1", "-W", strconv.Itoa(secs), h.target())
-	return cmd.Run() == nil
 }
 
-func (h *FailureHook) runScript(parent context.Context, reason string) {
+func (h *FailureHook) execute(parent context.Context, reason string) {
 	script := strings.TrimSpace(h.cfg.Script)
 	if script == "" {
 		h.logger.Warn("[hook] script path kosong, skip")
@@ -161,7 +141,7 @@ func (h *FailureHook) runScript(parent context.Context, reason string) {
 		if last := h.lastRun.Load(); last > 0 {
 			remain := cd - time.Duration(time.Now().Unix()-last)*time.Second
 			if remain > 0 {
-				h.logger.Info("[hook] cooldown aktif (sisa %s), skip", remain.Round(time.Second))
+				h.logger.Info("[hook] cooldown aktif (sisa %s), skip eksekusi", remain.Round(time.Second))
 				return
 			}
 		}
@@ -179,26 +159,40 @@ func (h *FailureHook) runScript(parent context.Context, reason string) {
 	}
 	timeout := h.cfg.ScriptTimeout.D()
 	if timeout <= 0 {
-		timeout = 30 * time.Second
+		timeout = 120 * time.Second
 	}
 	cctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
-argv := make([]string, 0, 1+len(h.cfg.ScriptArgs))
-	argv = append(argv, script)
-	argv = append(argv, h.cfg.ScriptArgs...)
+	// Bentuk perintah persis seperti di terminal: login.sh ganti-ip
+var cmdStr string
+if len(h.cfg.ScriptArgs) > 0 {
+	cmdStr = script + " " + strings.Join(h.cfg.ScriptArgs, " ")
+} else {
+	cmdStr = script
+}
 
-	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(cctx, shell, script)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	cmd.Env = append(os.Environ(),
-		"HOOK_REASON="+reason,
-		"HOOK_TARGET="+h.target(),
-		"HOOK_PROBE="+h.probeType(),
-	)
+cmdDir := filepath.Dir(script)
+if cmdDir == "" {
+	cmdDir = "."
+}
 
-	h.logger.Warn("[hook] menjalankan %s %s (reason=%s)", shell, strings.Join(argv, " "), reason)
+// Gunakan shell -c agar eksekusinya 100% sama seperti diketik manual
+var stdout, stderr bytes.Buffer
+cmd := exec.CommandContext(cctx, shell, "-c", cmdStr)
+cmd.Dir = cmdDir
+
+// Redirect stdin ke /dev/null agar script tidak hang menunggu input
+devNull, _ := os.Open(os.DevNull)
+cmd.Stdin = devNull
+defer devNull.Close()
+
+cmd.Env = append(os.Environ(),
+	"PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+	"HOOK_REASON="+reason,
+)
+
+h.logger.Warn("[hook] menjalankan: %s -c '%s' (reason=%s)", shell, cmdStr, reason)
 	start := time.Now()
 	err := cmd.Run()
 	dur := time.Since(start)
@@ -218,9 +212,4 @@ argv := make([]string, 0, 1+len(h.cfg.ScriptArgs))
 		return
 	}
 	h.logger.Info("[hook] script selesai dalam %s", dur.Round(time.Millisecond))
-}
-
-func (h *FailureHook) String() string {
-	return fmt.Sprintf("hook{enabled=%v, probe=%s, target=%s}",
-		h.cfg.Enabled, h.probeType(), h.target())
 }
