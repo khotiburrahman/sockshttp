@@ -127,6 +127,8 @@ type Config struct {
 		FailureThreshold int      `yaml:"failure_threshold"`
 	} `yaml:"health_check"`
 
+        FailureHook FailureHookConfig `yaml:"failure_hook"`
+
 	Limiter struct {
 		Enabled bool   `yaml:"enabled"`
 		File    string `yaml:"file"`
@@ -150,6 +152,20 @@ type ProxyGroupConfig struct {
 	Type    string   `yaml:"type"`
 	Proxies []string `yaml:"proxies"`
 	Default string   `yaml:"default"`
+}
+
+type FailureHookConfig struct {
+	Enabled       bool     `yaml:"enabled"`
+	Script        string   `yaml:"script"`
+	Shell         string   `yaml:"shell"`
+	Probe         string   `yaml:"probe"`
+	Target        string   `yaml:"target"`
+	PingCount     int      `yaml:"ping_count"`
+	Interval      Duration `yaml:"interval"`
+	ProbeTimeout  Duration `yaml:"probe_timeout"`
+	ScriptTimeout Duration `yaml:"script_timeout"`
+	Cooldown      Duration `yaml:"cooldown"`
+	OncePerOutage bool     `yaml:"once_per_outage"`
 }
 
 func DefaultConfig() *Config {
@@ -178,6 +194,16 @@ func DefaultConfig() *Config {
 	c.HealthCheck.Timeout = Duration(10 * time.Second)
 	c.HealthCheck.Target = "8.8.8.8:443"
 	c.HealthCheck.FailureThreshold = 3
+        c.FailureHook.Enabled = false
+        c.FailureHook.Shell = "/bin/sh"
+        c.FailureHook.Probe = "ping"
+        c.FailureHook.Target = "8.8.8.8"
+        c.FailureHook.PingCount = 3
+        c.FailureHook.Interval = Duration(10 * time.Second)
+        c.FailureHook.ProbeTimeout = Duration(5 * time.Second)
+        c.FailureHook.ScriptTimeout = Duration(30 * time.Second)
+        c.FailureHook.Cooldown = Duration(5 * time.Minute)
+        c.FailureHook.OncePerOutage = false
 	c.Limiter.Enabled = false
 	c.Limiter.File = "/tmp/sockshttp-limiter.json"
 	c.Log.Level = "info"
