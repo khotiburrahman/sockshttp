@@ -216,3 +216,37 @@ func (cw *connLimitedWriter) Write(b []byte) (int, error) {
 	}
 	return total, nil
 }
+
+// =========================================================
+// Destination Limiter Cache (Per-Device + Per-Rule)
+// =========================================================
+
+type RateLimiterCache struct {
+	mu      sync.Mutex
+	buckets map[string]*rateLimiter
+}
+
+func NewRateLimiterCache() *RateLimiterCache {
+	return &RateLimiterCache{
+		buckets: make(map[string]*rateLimiter),
+	}
+}
+
+func (c *RateLimiterCache) Get(key string, rate float64) *rateLimiter {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if l, ok := c.buckets[key]; ok {
+		// Jika rate berubah (karena edit YAML), buat bucket baru
+		if l.rate != rate {
+			nl := newRateLimiter(rate)
+			c.buckets[key] = nl
+			return nl
+		}
+		return l
+	}
+
+	l := newRateLimiter(rate)
+	c.buckets[key] = l
+	return l
+}
