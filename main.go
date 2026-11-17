@@ -92,6 +92,9 @@ func run() int {
 	go func() { tunnel.Run(ctx); close(tmDone) }()
 	tunnel.StartHealthLoop(ctx)
 
+        hook := NewFailureHook(cfg.FailureHook, logger)
+	hook.Start(ctx)
+
 	startupTimeout := cfg.StartupTimeout.D()
 	if startupTimeout <= 0 { startupTimeout = 60 * time.Second }
 	logger.Info("Menunggu koneksi SSH pertama (max %s)...", startupTimeout)
