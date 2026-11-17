@@ -157,6 +157,7 @@ type ProxyGroupConfig struct {
 type FailureHookConfig struct {
 	Enabled       bool     `yaml:"enabled"`
 	Script        string   `yaml:"script"`
+	ScriptArgs    []string `yaml:"script_args"`
 	Shell         string   `yaml:"shell"`
 	Probe         string   `yaml:"probe"`
 	Target        string   `yaml:"target"`
