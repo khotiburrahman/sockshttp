@@ -94,7 +94,7 @@ func (h *FailureHook) tick(ctx context.Context) {
 
 	downtime := time.Since(h.downSince)
 
-	// 3. Cek Kondisi A: Terlalu lama tidak tersambung (Misal: > 2 Menit)
+	// 3. Cek Kondisi A: Terlalu lama tidak tersambung (Misal: > 3 Menit)
 	if h.cfg.MaxDowntime.D() > 0 && downtime >= h.cfg.MaxDowntime.D() {
 		h.logger.Warn("[hook] Tunnel sudah %s tidak tersambung (max %s)", downtime.Round(time.Second), h.cfg.MaxDowntime.D())
 		h.execute(ctx, fmt.Sprintf("downtime-%s", downtime.Round(time.Second)))
@@ -165,34 +165,35 @@ func (h *FailureHook) execute(parent context.Context, reason string) {
 	defer cancel()
 
 	// Bentuk perintah persis seperti di terminal: login.sh ganti-ip
-var cmdStr string
-if len(h.cfg.ScriptArgs) > 0 {
-	cmdStr = script + " " + strings.Join(h.cfg.ScriptArgs, " ")
-} else {
-	cmdStr = script
-}
+	var cmdStr string
+	if len(h.cfg.ScriptArgs) > 0 {
+		cmdStr = script + " " + strings.Join(h.cfg.ScriptArgs, " ")
+	} else {
+		cmdStr = script
+	}
 
-cmdDir := filepath.Dir(script)
-if cmdDir == "" {
-	cmdDir = "."
-}
+	cmdDir := filepath.Dir(script)
+	if cmdDir == "" {
+		cmdDir = "."
+	}
 
-// Gunakan shell -c agar eksekusinya 100% sama seperti diketik manual
-var stdout, stderr bytes.Buffer
-cmd := exec.CommandContext(cctx, shell, "-c", cmdStr)
-cmd.Dir = cmdDir
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(cctx, shell, "-c", cmdStr)
+	cmd.Dir = cmdDir
 
-// Redirect stdin ke /dev/null agar script tidak hang menunggu input
-devNull, _ := os.Open(os.DevNull)
-cmd.Stdin = devNull
-defer devNull.Close()
+	// Redirect stdin ke /dev/null agar script tidak hang menunggu input
+	devNull, _ := os.Open(os.DevNull)
+	cmd.Stdin = devNull
+	defer devNull.Close()
 
-cmd.Env = append(os.Environ(),
-	"PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-	"HOOK_REASON="+reason,
-)
+	cmd.Env = append(os.Environ(),
+		"PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+		"HOOK_REASON="+reason,
+	)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 
-h.logger.Warn("[hook] menjalankan: %s -c '%s' (reason=%s)", shell, cmdStr, reason)
+	h.logger.Warn("[hook] menjalankan: %s -c '%s' (reason=%s)", shell, cmdStr, reason)
 	start := time.Now()
 	err := cmd.Run()
 	dur := time.Since(start)
