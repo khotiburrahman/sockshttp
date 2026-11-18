@@ -92,7 +92,7 @@ func run() int {
 	go func() { tunnel.Run(ctx); close(tmDone) }()
 	tunnel.StartHealthLoop(ctx)
 
-        hook := NewFailureHook(cfg.FailureHook, logger)
+        hook := NewFailureHook(cfg.FailureHook, logger, tunnel)
 	hook.Start(ctx)
 
 	startupTimeout := cfg.StartupTimeout.D()
