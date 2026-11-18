@@ -88,11 +88,17 @@ func run() int {
 	router, err := NewRouter(cfg, logger, tunnel, dns, realCache, proxyMgr, tracker, limiter, dynamicRules)
 	if err != nil { logger.Error("Router init: %v", err); return 1 }
 
+	// TAMBAHAN: Putus koneksi jika grup diubah (REJECT/TUNNEL/DIRECT)
+	proxyMgr.OnProxyChange = func(group, newProxy string) {
+		router.ForceCloseGroup(group, "proxy-switched-to-"+newProxy)
+	}
+
 	tmDone := make(chan struct{})
 	go func() { tunnel.Run(ctx); close(tmDone) }()
 	tunnel.StartHealthLoop(ctx)
 
-        hook := NewFailureHook(cfg.FailureHook, logger, tunnel)
+	// TAMBAHAN: Inisialisasi Failure Hook
+	hook := NewFailureHook(cfg.FailureHook, logger, tunnel)
 	hook.Start(ctx)
 
 	startupTimeout := cfg.StartupTimeout.D()
