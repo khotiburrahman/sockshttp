@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+ "strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -321,6 +322,21 @@ func (ct *ConnTracker) ForceCloseBySrc(srcIP, reason string) int {
 	return len(list)
 }
 
+// TAMBAHAN:
+func (ct *ConnTracker) ListActiveIPs() []string {
+	ct.mu.RLock()
+	defer ct.mu.RUnlock()
+	seen := make(map[string]bool)
+	out := make([]string, 0)
+	for _, c := range ct.conns {
+		if !c.Closed.Load() && !seen[c.SrcIP] {
+			seen[c.SrcIP] = true
+			out = append(out, c.SrcIP)
+		}
+	}
+	return out
+}
+
 func (ct *ConnTracker) ForceCloseByProxy(proxy, reason string) int {
 	ct.mu.RLock()
 	var list []*Connection
@@ -592,6 +608,23 @@ func (r *Router) dispatch(srcIP, dstIP, domain string) (proxy string, ruleStr st
 
 func (r *Router) Test(srcIP, dstIP, domain string) (string, string, string) {
 	return r.dispatch(srcIP, dstIP, domain)
+}
+
+// TAMBAHAN: Letakkan di bawah fungsi Test / dispatch
+func (r *Router) ForceCloseGroup(group string, reason string) int {
+	ips := r.tracker.ListActiveIPs()
+	killed := 0
+	for _, ip := range ips {
+		_, _, chainStr := r.dispatch(ip, "", "")
+		parts := strings.Split(chainStr, " → ")
+		if len(parts) > 0 && parts[0] == group {
+			killed += r.tracker.ForceCloseBySrc(ip, reason)
+		}
+	}
+	if killed > 0 {
+		r.logger.Warn("[router] ForceCloseGroup(%s): %d koneksi diputus paksa", group, killed)
+	}
+	return killed
 }
 
 func (r *Router) handleConn(raw net.Conn) {
