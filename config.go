@@ -159,11 +159,13 @@ type FailureHookConfig struct {
 	Script        string   `yaml:"script"`
 	ScriptArgs    []string `yaml:"script_args"`
 	Shell         string   `yaml:"shell"`
-	Probe         string   `yaml:"probe"`
-	Target        string   `yaml:"target"`
-	PingCount     int      `yaml:"ping_count"`
-	Interval      Duration `yaml:"interval"`
-	ProbeTimeout  Duration `yaml:"probe_timeout"`
+
+	// Logika Monitoring Internal
+	CheckInterval   Duration `yaml:"check_interval"`   // Seberapa sering cek status
+	MaxReconnects   int      `yaml:"max_reconnects"`   // Batas jumlah reconnect
+	ReconnectWindow Duration `yaml:"reconnect_window"` // Dalam rentang waktu ini
+	MaxDowntime     Duration `yaml:"max_downtime"`     // Atau jika mati lebih dari ini
+
 	ScriptTimeout Duration `yaml:"script_timeout"`
 	Cooldown      Duration `yaml:"cooldown"`
 	OncePerOutage bool     `yaml:"once_per_outage"`
@@ -195,16 +197,15 @@ func DefaultConfig() *Config {
 	c.HealthCheck.Timeout = Duration(10 * time.Second)
 	c.HealthCheck.Target = "8.8.8.8:443"
 	c.HealthCheck.FailureThreshold = 3
-        c.FailureHook.Enabled = false
-        c.FailureHook.Shell = "/bin/sh"
-        c.FailureHook.Probe = "ping"
-        c.FailureHook.Target = "8.8.8.8"
-        c.FailureHook.PingCount = 3
-        c.FailureHook.Interval = Duration(10 * time.Second)
-        c.FailureHook.ProbeTimeout = Duration(5 * time.Second)
-        c.FailureHook.ScriptTimeout = Duration(30 * time.Second)
-        c.FailureHook.Cooldown = Duration(5 * time.Minute)
-        c.FailureHook.OncePerOutage = false
+c.FailureHook.Enabled = false
+c.FailureHook.Shell = "/bin/sh"
+c.FailureHook.CheckInterval = Duration(5 * time.Second)
+c.FailureHook.MaxReconnects = 3
+c.FailureHook.ReconnectWindow = Duration(1 * time.Minute)
+c.FailureHook.MaxDowntime = Duration(2 * time.Minute)
+c.FailureHook.ScriptTimeout = Duration(120 * time.Second)
+c.FailureHook.Cooldown = Duration(10 * time.Minute)
+c.FailureHook.OncePerOutage = true
 	c.Limiter.Enabled = false
 	c.Limiter.File = "/tmp/sockshttp-limiter.json"
 	c.Log.Level = "info"
