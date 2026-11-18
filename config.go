@@ -127,7 +127,8 @@ type Config struct {
 		FailureThreshold int      `yaml:"failure_threshold"`
 	} `yaml:"health_check"`
 
-        FailureHook FailureHookConfig `yaml:"failure_hook"`
+	// TAMBAHAN: Konfigurasi Failure Hook
+	FailureHook FailureHookConfig `yaml:"failure_hook"`
 
 	Limiter struct {
 		Enabled bool   `yaml:"enabled"`
@@ -141,8 +142,8 @@ type Config struct {
 		MaxBackups int    `yaml:"max_backups"`
 	} `yaml:"log"`
 
-	StateFile  string `yaml:"state_file"`
-	PIDFile    string `yaml:"pid_file"`
+	StateFile    string `yaml:"state_file"`
+	PIDFile      string `yaml:"pid_file"`
 
 	ValidityDate int64 `yaml:"-"`
 }
@@ -154,17 +155,17 @@ type ProxyGroupConfig struct {
 	Default string   `yaml:"default"`
 }
 
+// TAMBAHAN: Struct untuk Failure Hook
 type FailureHookConfig struct {
 	Enabled       bool     `yaml:"enabled"`
 	Script        string   `yaml:"script"`
 	ScriptArgs    []string `yaml:"script_args"`
 	Shell         string   `yaml:"shell"`
 
-	// Logika Monitoring Internal
-	CheckInterval   Duration `yaml:"check_interval"`   // Seberapa sering cek status
-	MaxReconnects   int      `yaml:"max_reconnects"`   // Batas jumlah reconnect
-	ReconnectWindow Duration `yaml:"reconnect_window"` // Dalam rentang waktu ini
-	MaxDowntime     Duration `yaml:"max_downtime"`     // Atau jika mati lebih dari ini
+	CheckInterval   Duration `yaml:"check_interval"`
+	MaxReconnects   int      `yaml:"max_reconnects"`
+	ReconnectWindow Duration `yaml:"reconnect_window"`
+	MaxDowntime     Duration `yaml:"max_downtime"`
 
 	ScriptTimeout Duration `yaml:"script_timeout"`
 	Cooldown      Duration `yaml:"cooldown"`
@@ -197,15 +198,18 @@ func DefaultConfig() *Config {
 	c.HealthCheck.Timeout = Duration(10 * time.Second)
 	c.HealthCheck.Target = "8.8.8.8:443"
 	c.HealthCheck.FailureThreshold = 3
-c.FailureHook.Enabled = false
-c.FailureHook.Shell = "/bin/sh"
-c.FailureHook.CheckInterval = Duration(5 * time.Second)
-c.FailureHook.MaxReconnects = 3
-c.FailureHook.ReconnectWindow = Duration(1 * time.Minute)
-c.FailureHook.MaxDowntime = Duration(2 * time.Minute)
-c.FailureHook.ScriptTimeout = Duration(120 * time.Second)
-c.FailureHook.Cooldown = Duration(10 * time.Minute)
-c.FailureHook.OncePerOutage = true
+
+	// Default Failure Hook
+	c.FailureHook.Enabled = false
+	c.FailureHook.Shell = "/bin/sh"
+	c.FailureHook.CheckInterval = Duration(5 * time.Second)
+	c.FailureHook.MaxReconnects = 3
+	c.FailureHook.ReconnectWindow = Duration(1 * time.Minute)
+	c.FailureHook.MaxDowntime = Duration(3 * time.Minute)
+	c.FailureHook.ScriptTimeout = Duration(120 * time.Second)
+	c.FailureHook.Cooldown = Duration(10 * time.Minute)
+	c.FailureHook.OncePerOutage = true
+
 	c.Limiter.Enabled = false
 	c.Limiter.File = "/tmp/sockshttp-limiter.json"
 	c.Log.Level = "info"
