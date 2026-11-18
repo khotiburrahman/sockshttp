@@ -17,10 +17,11 @@ type ProxyGroup struct {
 }
 
 type ProxyManager struct {
-	mu          sync.RWMutex
-	groups      map[string]*ProxyGroup
-	order       []string
-	persistFile string
+	mu            sync.RWMutex
+	groups        map[string]*ProxyGroup
+	order         []string
+	persistFile   string
+	OnProxyChange func(group, newProxy string) // TAMBAHAN
 }
 
 func NewProxyManager(cfgs []ProxyGroupConfig, persistFile string) *ProxyManager {
@@ -35,7 +36,6 @@ func NewProxyManager(cfgs []ProxyGroupConfig, persistFile string) *ProxyManager 
 			Proxies: c.Proxies,
 			Now:     c.Default,
 		}
-		// Validasi: default harus anggota proxies
 		valid := false
 		for _, p := range c.Proxies {
 			if p == g.Now {
@@ -44,7 +44,6 @@ func NewProxyManager(cfgs []ProxyGroupConfig, persistFile string) *ProxyManager 
 			}
 		}
 		if !valid && len(c.Proxies) > 0 {
-			// Fallback ke proxy pertama; warning akan muncul via ValidateAll
 			g.Now = c.Proxies[0]
 		}
 		pm.groups[c.Name] = g
@@ -130,7 +129,14 @@ func (pm *ProxyManager) Set(groupName, proxyName string) error {
 	}
 	g.Now = proxyName
 	pm.mu.Unlock()
+	
 	pm.saveState()
+
+	// TAMBAHAN: Pemicu Callback
+	if pm.OnProxyChange != nil {
+		pm.OnProxyChange(groupName, proxyName)
+	}
+	
 	return nil
 }
 
@@ -150,26 +156,24 @@ func (pm *ProxyManager) Resolve(target string) (string, string) {
 	return ProxyReject, strings.Join(chain, " → ") + " (loop)"
 }
 
-// ValidateAll mengembalikan daftar issue konfigurasi grup.
-// Dipanggil di main.go saat startup untuk log warning.
 func (pm *ProxyManager) ValidateAll() []string {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 	var issues []string
 	for name, g := range pm.groups {
-		if g.Now == "" {
-			issues = append(issues, fmt.Sprintf("group %s: tidak ada proxy terpilih", name))
+		if len(g.Proxies) == 0 {
+			issues = append(issues, fmt.Sprintf("Group %q tidak punya proxy", name))
 			continue
 		}
-		valid := false
+		found := false
 		for _, p := range g.Proxies {
 			if p == g.Now {
-				valid = true
+				found = true
 				break
 			}
 		}
-		if !valid {
-			issues = append(issues, fmt.Sprintf("group %s: default %q bukan anggota", name, g.Now))
+		if !found {
+			issues = append(issues, fmt.Sprintf("Group %q default proxy %q tidak ada di list", name, g.Now))
 		}
 	}
 	return issues
