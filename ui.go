@@ -1213,13 +1213,25 @@ function scheduleLogClear() {
 function connectLogs(){
   if (SOCKSHTTP_LOCKED) return;
   if(logSource){logSource.close()}
-  const box=document.getElementById('logbox'); logBuffer=''; box.textContent='';
+  
+  const box=document.getElementById('logbox'); 
+  
+  // JIKA logBuffer masih kosong (baru buka tab), tampilkan teks loading.
+  // JIKA sudah ada isinya, JANGAN dihapus.
+  if(logBuffer === '') {
+      box.textContent = 'Connecting to log stream...';
+  }
+
   fetch('/api/logs').then(r=>{
     if (r.status === 401) { SOCKSHTTP_LOCKED = true; showLoginModal(); return; }
     const reader=r.body.getReader(); const dec=new TextDecoder();
     function read(){
       reader.read().then(res=>{
-        if(res.done){setTimeout(connectLogs,2000);return}
+        if(res.done){
+          // Koneksi putus, tunggu 2 detik lalu sambung lagi (TANPA hapus layar)
+          setTimeout(connectLogs,2000);
+          return;
+        }
         logBuffer+=dec.decode(res.value);
         if(logMaxLines > 0){
           const lines = logBuffer.split('\n');
