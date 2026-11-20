@@ -34,6 +34,10 @@ dns:
   bind: 0.0.0.0:1054
   upstream: 174.138.21.128:53
 
+adblock:
+  enable: true
+  path: /root/sockshttp-linux-arm64/geosite.dat
+
 redirect:
   bind: 0.0.0.0:7893
 
