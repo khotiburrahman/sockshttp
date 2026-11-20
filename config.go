@@ -101,6 +101,11 @@ type Config struct {
 		Upstream string `yaml:"upstream"`
 	} `yaml:"dns"`
 
+	Adblock struct {
+		Enable bool   `yaml:"enable"`
+		Path   string `yaml:"path"`
+	} `yaml:"adblock"`
+
 	Redirect struct {
 		Bind string `yaml:"bind"`
 	} `yaml:"redirect"`
@@ -188,6 +193,8 @@ func DefaultConfig() *Config {
 	c.DNS.Mode = "forward"
 	c.DNS.Bind = "0.0.0.0:1053"
 	c.DNS.Upstream = "1.1.1.1:53"
+ c.Adblock.Enable = false
+	c.Adblock.Path = "/root/sockshttp-linux-arm64/geosite.dat"
 	c.Redirect.Bind = "127.0.0.1:7892"
 	c.API.Bind = "0.0.0.0:9090"
 	c.Reconnect.Enabled = true
