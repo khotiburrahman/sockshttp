@@ -82,7 +82,9 @@ func run() int {
 	defer tracker.Shutdown()
 
 	limiter := NewBandwidthLimiter(cfg.Limiter.Enabled, cfg.Limiter.File, logger)
-	dns := NewDNSServer(cfg, logger, realCache, tunnel)
+adblock := NewAdblocker(cfg) // <--- Tambah ini
+	
+	dns := NewDNSServer(cfg, logger, realCache, tunnel, adblock) // <--- Ubah parameter dns
 	socks5 := NewSOCKS5Server(cfg, logger, tunnel, proxyMgr, tracker)
 
 	router, err := NewRouter(cfg, logger, tunnel, dns, realCache, proxyMgr, tracker, limiter, dynamicRules)
