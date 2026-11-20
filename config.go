@@ -89,7 +89,7 @@ type Config struct {
 	TunnelType        string   `yaml:"tunnel_type"`
 	ProxyHost         string   `yaml:"proxy_host"`
 	ProxyHostFallback []string `yaml:"proxy_host_fallback"`
-	ProxyPort         int      `yaml:"proxy_port"` // Port fallback jika proxy_rotate disabled
+	ProxyPort         int      `yaml:"proxy_port"`
 	UseDefaultPayload bool     `yaml:"use_default_payload"`
 	CustomPayload     string   `yaml:"custom_payload"`
 
@@ -145,7 +145,6 @@ type Config struct {
 		FailureThreshold int      `yaml:"failure_threshold"`
 	} `yaml:"health_check"`
 
-	// Konfigurasi Failure Hook
 	FailureHook FailureHookConfig `yaml:"failure_hook"`
 
 	Limiter struct {
@@ -219,7 +218,6 @@ func DefaultConfig() *Config {
 	c.HealthCheck.Target = "8.8.8.8:443"
 	c.HealthCheck.FailureThreshold = 3
 
-	// Default Failure Hook
 	c.FailureHook.Enabled = false
 	c.FailureHook.Shell = "/bin/sh"
 	c.FailureHook.CheckInterval = Duration(5 * time.Second)
