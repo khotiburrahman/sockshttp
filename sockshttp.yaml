@@ -3,14 +3,40 @@
 # Mode: forward-only (DNS via tunnel, tanpa Fake-IP)
 # ============================================================
 
-server: host
-server_port: 443
-username: unme
-password: pw
+# ------------------------------------------------------------
+# SSH — single account (legacy, tetap didukung):
+# server: host
+# server_port: 443
+# username: unme
+# password: pw
+#
+# SSH — multi-account (baru):
+# Isi ssh_accounts. Kalau ssh_accounts diisi, field top-level
+# server/server_port/username/password diabaikan untuk dial.
+# Kalau ssh_accounts KOSONG, otomatis dibentuk 1 akun dari
+# field top-level (kompatibel dengan config lama + flag CLI).
+# ------------------------------------------------------------
+
+max_retry_per_account: 3    # rotate setelah 3x gagal per akun (auth fail = rotate langsung)
+
+ssh_accounts:
+  - server: server1.example.com
+    server_port: 443
+    username: user1
+    password: pass1
+  - server: server2.example.com
+    server_port: 443
+    username: user2
+    password: pass2
+  # - server: server3.example.com
+  #   server_port: 22
+  #   username: user3
+  #   key_path: /root/.ssh/id_ed25519
+  #   password: passphrase_key   # opsional, kalau key ber-passphrase
 
 tunnel_type: proxy
 proxy_host: proxy
-proxy_port: port # Port fallback jika fitur proxy_rotate disable
+proxy_port: 443
 use_default_payload: false
 custom_payload: "GET / HTTP/1.1[crlf]Host: edu.ruangguru.com[crlf]Connection: Keep-Alive[crlf][crlf]PATCH / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf][crlf][split]HTTP/ 69[crlf][crlf]"
 
@@ -43,7 +69,7 @@ redirect:
 
 api:
   bind: 0.0.0.0:9091
-  secret: ""    # kosong = UI bebas diakses. Isi dengan string untuk aktifkan modal login.
+  secret: ""    # kosong = UI bebas diakses. Isi string untuk modal login.
 
 proxy-groups:
   - name: DEFAULT
@@ -99,7 +125,7 @@ health_check:
 failure_hook:
   enabled: true
   script: "/root/E5573/login.sh"
-  script_args: ["ganti-ip"]     # <--- WAJIB pakai kurung siku
+  script_args: ["ganti-ip"]
   shell: "/bin/sh"
   check_interval: 5s
   max_reconnects: 3
