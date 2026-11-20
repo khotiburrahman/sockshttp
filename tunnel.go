@@ -111,6 +111,25 @@ type SSHTunnel struct {
 	rotMu    sync.Mutex
 	rotIndex int
 	rotFails int
+
+	// Callback dipanggil setelah client ditutup (untuk force-close semua conn user-side)
+	// Disimpan sebagai atomic.Value bertipe func(string) agar aman tanpa lock.
+	onClientClosed atomic.Value
+}
+
+// SetOnClientClosed mendaftarkan callback yang dipanggil setiap kali SSH client
+// di-close (putus, rotasi akun, shutdown). Gunakan untuk force-close semua
+// koneksi user-side agar app tidak menunggu timeout TCP.
+func (t *SSHTunnel) SetOnClientClosed(fn func(reason string)) {
+	t.onClientClosed.Store(fn)
+}
+
+func (t *SSHTunnel) fireClientClosed(reason string) {
+	if v := t.onClientClosed.Load(); v != nil {
+		if fn, ok := v.(func(string)); ok && fn != nil {
+			fn(reason)
+		}
+	}
 }
 
 func NewSSHTunnel(cfg *Config, logger *Logger, dynRules *DynamicRules) *SSHTunnel {
@@ -560,7 +579,6 @@ func (t *SSHTunnel) pinger(client *ssh.Client) {
 			return
 		}
 
-		// Timeout 5 detik untuk mencegah zombie connection
 		done := make(chan error, 1)
 		go func() {
 			_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
@@ -593,12 +611,19 @@ func (t *SSHTunnel) pinger(client *ssh.Client) {
 
 func (t *SSHTunnel) cleanup() {
 	t.mu.Lock()
+	had := t.client != nil
 	if t.client != nil {
 		t.client.Close()
 	}
 	t.client = nil
 	t.mu.Unlock()
 	t.connected.Store(false)
+
+	// Beri tahu pemilik tracker agar semua conn user-side dipaksa tutup.
+	if had {
+		t.fireClientClosed("tunnel-closed")
+	}
+
 	select {
 	case <-t.disconCh:
 	default:
@@ -607,6 +632,8 @@ func (t *SSHTunnel) cleanup() {
 
 func (t *SSHTunnel) Run(ctx context.Context) {
 	backoff := t.cfg.Reconnect.InitialDelay.D()
+	consecutiveRotations := 0
+
 	for {
 		if ctx.Err() != nil {
 			t.cleanup()
@@ -616,15 +643,41 @@ func (t *SSHTunnel) Run(ctx context.Context) {
 		t.setState("connecting")
 		if err := t.dialOnce(); err != nil {
 			t.lastErr.Store(err.Error())
-			if t.onDialFailure(err) {
-				// Akun baru — beri kesempatan dengan backoff yang di-reset
-				backoff = t.cfg.Reconnect.InitialDelay.D()
-			}
+			rotated := t.onDialFailure(err)
 			t.trackReconnectAndRotate()
+
+			if rotated {
+				// Paksa tutup sisa client lama + semua conn user-side
+				t.cleanup()
+
+				// Reset backoff — akun baru layak dicoba cepat
+				backoff = t.cfg.Reconnect.InitialDelay.D()
+				consecutiveRotations++
+
+				if consecutiveRotations >= len(t.cfg.SSHAccounts) {
+					// Satu putaran penuh gagal — kembali ke backoff normal
+					// supaya tidak busy-loop ketika semua akun bermasalah.
+					t.logger.Warn("[ssh-rotate] seluruh %d akun gagal dalam 1 putaran, kembali pakai backoff",
+						len(t.cfg.SSHAccounts))
+					consecutiveRotations = 0
+					t.waitBackoff(ctx, &backoff)
+				} else {
+					// Retry langsung (delay kecil untuk cegah tight-loop instan)
+					select {
+					case <-ctx.Done():
+						t.cleanup()
+						return
+					case <-time.After(500 * time.Millisecond):
+					}
+				}
+				continue
+			}
+
 			t.waitBackoff(ctx, &backoff)
 			continue
 		}
 		t.onDialSuccess()
+		consecutiveRotations = 0
 
 		select {
 		case err := <-t.disconCh:
