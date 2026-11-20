@@ -66,12 +66,25 @@ func (d Duration) MarshalYAML() (interface{}, error) {
 
 func (d Duration) D() time.Duration { return time.Duration(d) }
 
+// SSHAccount — satu kredensial SSH untuk multi-account rotation.
+type SSHAccount struct {
+	Server     string `yaml:"server"`
+	ServerPort int    `yaml:"server_port"`
+	Username   string `yaml:"username"`
+	Password   string `yaml:"password"`
+	KeyPath    string `yaml:"key_path,omitempty"`
+}
+
 type Config struct {
 	Server     string `yaml:"server"`
 	ServerPort int    `yaml:"server_port"`
 	Username   string `yaml:"username"`
 	Password   string `yaml:"password"`
 	KeyPath    string `yaml:"key_path,omitempty"`
+
+	// Multi-account SSH
+	SSHAccounts        []SSHAccount `yaml:"ssh_accounts"`
+	MaxRetryPerAccount int          `yaml:"max_retry_per_account"`
 
 	TunnelType        string   `yaml:"tunnel_type"`
 	ProxyHost         string   `yaml:"proxy_host"`
@@ -132,7 +145,7 @@ type Config struct {
 		FailureThreshold int      `yaml:"failure_threshold"`
 	} `yaml:"health_check"`
 
-	// TAMBAHAN: Konfigurasi Failure Hook
+	// Konfigurasi Failure Hook
 	FailureHook FailureHookConfig `yaml:"failure_hook"`
 
 	Limiter struct {
@@ -147,8 +160,8 @@ type Config struct {
 		MaxBackups int    `yaml:"max_backups"`
 	} `yaml:"log"`
 
-	StateFile    string `yaml:"state_file"`
-	PIDFile      string `yaml:"pid_file"`
+	StateFile string `yaml:"state_file"`
+	PIDFile   string `yaml:"pid_file"`
 
 	ValidityDate int64 `yaml:"-"`
 }
@@ -160,12 +173,11 @@ type ProxyGroupConfig struct {
 	Default string   `yaml:"default"`
 }
 
-// TAMBAHAN: Struct untuk Failure Hook
 type FailureHookConfig struct {
-	Enabled       bool     `yaml:"enabled"`
-	Script        string   `yaml:"script"`
-	ScriptArgs    []string `yaml:"script_args"`
-	Shell         string   `yaml:"shell"`
+	Enabled    bool     `yaml:"enabled"`
+	Script     string   `yaml:"script"`
+	ScriptArgs []string `yaml:"script_args"`
+	Shell      string   `yaml:"shell"`
 
 	CheckInterval   Duration `yaml:"check_interval"`
 	MaxReconnects   int      `yaml:"max_reconnects"`
@@ -179,13 +191,14 @@ type FailureHookConfig struct {
 
 func DefaultConfig() *Config {
 	c := &Config{
-		ServerPort:     22,
-		TunnelType:     "direct",
-		Pinger:         30,
-		PingerMax:      45,
-		NoDelay:        true,
-		StartupTimeout: Duration(60 * time.Second),
-		ConnRetention:  Duration(60 * time.Second),
+		ServerPort:         22,
+		TunnelType:         "direct",
+		Pinger:             30,
+		PingerMax:          45,
+		NoDelay:            true,
+		StartupTimeout:     Duration(60 * time.Second),
+		ConnRetention:      Duration(60 * time.Second),
+		MaxRetryPerAccount: 3,
 	}
 	c.SOCKS5.Bind = "127.0.0.1"
 	c.SOCKS5.Port = 7777
@@ -193,7 +206,7 @@ func DefaultConfig() *Config {
 	c.DNS.Mode = "forward"
 	c.DNS.Bind = "0.0.0.0:1053"
 	c.DNS.Upstream = "1.1.1.1:53"
- c.Adblock.Enable = false
+	c.Adblock.Enable = false
 	c.Adblock.Path = "/root/sockshttp-linux-arm64/geosite.dat"
 	c.Redirect.Bind = "127.0.0.1:7892"
 	c.API.Bind = "0.0.0.0:9090"
