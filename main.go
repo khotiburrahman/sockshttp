@@ -133,6 +133,14 @@ func run() int {
 	tracker := NewConnTracker(cfg.StateFile, cfg.ConnRetention.D())
 	defer tracker.Shutdown()
 
+	// Setiap kali SSH client ditutup (rotasi akun / putus / shutdown),
+	// paksa semua koneksi user-side (SOCKS5/DNS/Router) tutup agar app
+	// fail-fast dan tidak menunggu timeout TCP OS.
+	tunnel.SetOnClientClosed(func(reason string) {
+		logger.Info("[tunnel] force-close semua koneksi aktif (reason=%s)", reason)
+		tracker.ForceCloseAll(reason)
+	})
+
 	limiter := NewBandwidthLimiter(cfg.Limiter.Enabled, cfg.Limiter.File, logger)
 	adblock := NewAdblocker(cfg)
 
@@ -145,7 +153,6 @@ func run() int {
 		return 1
 	}
 
-	// Putus koneksi jika grup diubah (REJECT/TUNNEL/DIRECT)
 	proxyMgr.OnProxyChange = func(group, newProxy string) {
 		router.ForceCloseGroup(group, "proxy-switched-to-"+newProxy)
 	}
@@ -154,7 +161,6 @@ func run() int {
 	go func() { tunnel.Run(ctx); close(tmDone) }()
 	tunnel.StartHealthLoop(ctx)
 
-	// Failure Hook
 	hook := NewFailureHook(cfg.FailureHook, logger, tunnel)
 	hook.Start(ctx)
 
