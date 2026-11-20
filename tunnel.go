@@ -30,13 +30,17 @@ type monitoredConn struct {
 
 func (c *monitoredConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
-	if err != nil { c.once.Do(func() { c.onClose(err) }) }
+	if err != nil {
+		c.once.Do(func() { c.onClose(err) })
+	}
 	return n, err
 }
 
 func (c *monitoredConn) Write(b []byte) (int, error) {
 	n, err := c.Conn.Write(b)
-	if err != nil { c.once.Do(func() { c.onClose(err) }) }
+	if err != nil {
+		c.once.Do(func() { c.onClose(err) })
+	}
 	return n, err
 }
 
@@ -62,12 +66,24 @@ func dialSSHWithTimeout(client *ssh.Client, network, addr string, timeout time.D
 		go func() {
 			select {
 			case r := <-resultCh:
-				if r.conn != nil { r.conn.Close() }
+				if r.conn != nil {
+					r.conn.Close()
+				}
 			case <-time.After(30 * time.Second):
 			}
 		}()
 		return nil, fmt.Errorf("SSH dial timeout setelah %s ke %s", timeout, addr)
 	}
+}
+
+// isAuthError — deteksi error yang menandakan kredensial salah (deterministik).
+func isAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "unable to authenticate") ||
+		strings.Contains(s, "no supported methods remain")
 }
 
 type SSHTunnel struct {
@@ -90,6 +106,11 @@ type SSHTunnel struct {
 	currentPort int
 	portIndex   int
 	connHistory []time.Time
+
+	// Rotasi multi-akun SSH
+	rotMu    sync.Mutex
+	rotIndex int
+	rotFails int
 }
 
 func NewSSHTunnel(cfg *Config, logger *Logger, dynRules *DynamicRules) *SSHTunnel {
@@ -97,6 +118,11 @@ func NewSSHTunnel(cfg *Config, logger *Logger, dynRules *DynamicRules) *SSHTunne
 		cfg: cfg, logger: logger, disconCh: make(chan error, 1), dynamicRules: dynRules,
 	}
 	t.state.Store("disconnected")
+
+	if n := len(cfg.SSHAccounts); n > 1 {
+		logger.Info("[ssh] multi-account aktif: %d akun, rotate tiap %d kegagalan per akun",
+			n, cfg.MaxRetryPerAccount)
+	}
 
 	_, ports, _, _ := dynRules.GetProxyRotate()
 	t.proxyPortMu.Lock()
@@ -112,20 +138,26 @@ func NewSSHTunnel(cfg *Config, logger *Logger, dynRules *DynamicRules) *SSHTunne
 }
 
 func (t *SSHTunnel) GetCurrentPort() int {
-	t.proxyPortMu.Lock(); defer t.proxyPortMu.Unlock()
+	t.proxyPortMu.Lock()
+	defer t.proxyPortMu.Unlock()
 	return t.currentPort
 }
 
 func (t *SSHTunnel) trackReconnectAndRotate() {
 	enabled, ports, maxRetries, window := t.dynamicRules.GetProxyRotate()
-	if !enabled || len(ports) <= 1 { return }
+	if !enabled || len(ports) <= 1 {
+		return
+	}
 
-	t.proxyPortMu.Lock(); defer t.proxyPortMu.Unlock()
+	t.proxyPortMu.Lock()
+	defer t.proxyPortMu.Unlock()
 
 	now := time.Now()
 	var validHistory []time.Time
 	for _, ts := range t.connHistory {
-		if now.Sub(ts) <= window { validHistory = append(validHistory, ts) }
+		if now.Sub(ts) <= window {
+			validHistory = append(validHistory, ts)
+		}
 	}
 	validHistory = append(validHistory, now)
 	t.connHistory = validHistory
@@ -135,43 +167,129 @@ func (t *SSHTunnel) trackReconnectAndRotate() {
 		t.portIndex = (t.portIndex + 1) % len(ports)
 		t.currentPort = ports[t.portIndex]
 		t.logger.Warn("[tunnel] Terdeteksi %d kegagalan dalam %v. Rotasi port proxy: %d -> %d", len(t.connHistory), window, oldPort, t.currentPort)
-		t.connHistory = nil 
+		t.connHistory = nil
 	}
 }
 
-func (t *SSHTunnel) State() string { return t.state.Load().(string) }
+func (t *SSHTunnel) State() string     { return t.state.Load().(string) }
 func (t *SSHTunnel) setState(s string) { t.state.Store(s); t.logger.Info("State: %s", s) }
-func (t *SSHTunnel) GetClient() *ssh.Client { t.mu.RLock(); defer t.mu.RUnlock(); return t.client }
+func (t *SSHTunnel) GetClient() *ssh.Client {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.client
+}
 
 func (t *SSHTunnel) Dial(network, addr string) (net.Conn, error) {
 	c := t.GetClient()
-	if c == nil { return nil, errors.New("tunnel tidak aktif") }
+	if c == nil {
+		return nil, errors.New("tunnel tidak aktif")
+	}
 	return dialSSHWithTimeout(c, network, addr, tunnelDialTimeout)
 }
 
-func (t *SSHTunnel) buildAuth() ([]ssh.AuthMethod, error) {
+// --- Rotator akun ---------------------------------------------------------
+
+func (t *SSHTunnel) currentAccount() SSHAccount {
+	t.rotMu.Lock()
+	defer t.rotMu.Unlock()
+
+	if len(t.cfg.SSHAccounts) == 0 {
+		return SSHAccount{
+			Server: t.cfg.Server, ServerPort: t.cfg.ServerPort,
+			Username: t.cfg.Username, Password: t.cfg.Password, KeyPath: t.cfg.KeyPath,
+		}
+	}
+	if t.rotIndex >= len(t.cfg.SSHAccounts) || t.rotIndex < 0 {
+		t.rotIndex = 0
+	}
+	return t.cfg.SSHAccounts[t.rotIndex]
+}
+
+func (t *SSHTunnel) onDialSuccess() {
+	t.rotMu.Lock()
+	defer t.rotMu.Unlock()
+	t.rotFails = 0
+}
+
+// onDialFailure mengembalikan true jika akun sudah dirotasi.
+func (t *SSHTunnel) onDialFailure(err error) (rotated bool) {
+	t.rotMu.Lock()
+	defer t.rotMu.Unlock()
+
+	if len(t.cfg.SSHAccounts) <= 1 {
+		return false
+	}
+
+	oldIdx := t.rotIndex
+	prev := t.cfg.SSHAccounts[oldIdx]
+
+	// Auth failure = deterministik → rotate sekarang juga
+	if isAuthError(err) {
+		t.rotFails = 0
+		t.rotIndex = (t.rotIndex + 1) % len(t.cfg.SSHAccounts)
+		next := t.cfg.SSHAccounts[t.rotIndex]
+		t.logger.Warn("[ssh-rotate] AUTH gagal akun %d (%s@%s) → rotate langsung ke akun %d (%s@%s): %v",
+			oldIdx+1, prev.Username, prev.Server,
+			t.rotIndex+1, next.Username, next.Server, err)
+		return true
+	}
+
+	max := t.cfg.MaxRetryPerAccount
+	if max <= 0 {
+		max = 3
+	}
+
+	t.rotFails++
+	if t.rotFails < max {
+		t.logger.Warn("[ssh-rotate] akun %d/%d gagal (%d/%d) – tetap pakai akun ini: %v",
+			t.rotIndex+1, len(t.cfg.SSHAccounts), t.rotFails, max, err)
+		return false
+	}
+
+	t.rotFails = 0
+	t.rotIndex = (t.rotIndex + 1) % len(t.cfg.SSHAccounts)
+	next := t.cfg.SSHAccounts[t.rotIndex]
+	t.logger.Warn("[ssh-rotate] akun %d (%s@%s) gagal %dx → rotate ke akun %d (%s@%s)",
+		oldIdx+1, prev.Username, prev.Server, max,
+		t.rotIndex+1, next.Username, next.Server)
+	return true
+}
+
+// --- Autentikasi & dial ---------------------------------------------------
+
+func (t *SSHTunnel) buildAuth(acct SSHAccount) ([]ssh.AuthMethod, error) {
 	var auths []ssh.AuthMethod
-	if t.cfg.KeyPath != "" {
-		data, err := os.ReadFile(t.cfg.KeyPath)
+	if acct.KeyPath != "" {
+		data, err := os.ReadFile(acct.KeyPath)
 		if err == nil {
 			var signer ssh.Signer
-			if t.cfg.Password != "" {
-				signer, err = ssh.ParsePrivateKeyWithPassphrase(data, []byte(t.cfg.Password))
+			if acct.Password != "" {
+				signer, err = ssh.ParsePrivateKeyWithPassphrase(data, []byte(acct.Password))
 			} else {
 				signer, err = ssh.ParsePrivateKey(data)
 			}
-			if err == nil { auths = append(auths, ssh.PublicKeys(signer)) }
+			if err == nil {
+				auths = append(auths, ssh.PublicKeys(signer))
+			}
 		}
 	}
-	if t.cfg.Password != "" { auths = append(auths, ssh.Password(t.cfg.Password)) }
-	if len(auths) == 0 { return nil, errors.New("tidak ada auth") }
+	if acct.Password != "" {
+		auths = append(auths, ssh.Password(acct.Password))
+	}
+	if len(auths) == 0 {
+		return nil, errors.New("tidak ada auth")
+	}
 	return auths, nil
 }
 
 func (t *SSHTunnel) resolveHost(hostname string) []string {
-	if net.ParseIP(hostname) != nil { return []string{hostname} }
+	if net.ParseIP(hostname) != nil {
+		return []string{hostname}
+	}
 	ips, err := net.LookupHost(hostname)
-	if err == nil && len(ips) > 0 { return ips }
+	if err == nil && len(ips) > 0 {
+		return ips
+	}
 	resolver := &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -182,12 +300,16 @@ func (t *SSHTunnel) resolveHost(hostname string) []string {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	ips, err = resolver.LookupHost(ctx, hostname)
-	if err == nil && len(ips) > 0 { return ips }
-	if len(t.cfg.ProxyHostFallback) > 0 { return t.cfg.ProxyHostFallback }
+	if err == nil && len(ips) > 0 {
+		return ips
+	}
+	if len(t.cfg.ProxyHostFallback) > 0 {
+		return t.cfg.ProxyHostFallback
+	}
 	return []string{hostname}
 }
 
-func (t *SSHTunnel) openRawConn() (net.Conn, error) {
+func (t *SSHTunnel) openRawConn(acct SSHAccount) (net.Conn, error) {
 	var payload string
 	var readResponse bool
 	var targetHost string
@@ -197,16 +319,16 @@ func (t *SSHTunnel) openRawConn() (net.Conn, error) {
 		targetHost = t.cfg.ProxyHost
 		targetPort = t.GetCurrentPort()
 		if t.cfg.UseDefaultPayload {
-			payload = fmt.Sprintf("CONNECT %s:%d HTTP/1.0\r\n\r\n", t.cfg.Server, t.cfg.ServerPort)
+			payload = fmt.Sprintf("CONNECT %s:%d HTTP/1.0\r\n\r\n", acct.Server, acct.ServerPort)
 		} else {
-			payload = formatPayload(t.cfg.Server, t.cfg.ServerPort, t.cfg.CustomPayload)
+			payload = formatPayload(acct.Server, acct.ServerPort, t.cfg.CustomPayload)
 		}
 		readResponse = true
 	} else {
-		targetHost = t.cfg.Server
-		targetPort = t.cfg.ServerPort
+		targetHost = acct.Server
+		targetPort = acct.ServerPort
 		if !t.cfg.UseDefaultPayload {
-			payload = formatPayload(t.cfg.Server, t.cfg.ServerPort, t.cfg.CustomPayload)
+			payload = formatPayload(acct.Server, acct.ServerPort, t.cfg.CustomPayload)
 		}
 	}
 
@@ -217,17 +339,24 @@ func (t *SSHTunnel) openRawConn() (net.Conn, error) {
 	for _, ip := range ips {
 		dialAddr := net.JoinHostPort(ip, strconv.Itoa(targetPort))
 		conn, lastErr = net.DialTimeout("tcp", dialAddr, 10*time.Second)
-		if lastErr == nil { break }
+		if lastErr == nil {
+			break
+		}
 	}
-	if conn == nil { return nil, fmt.Errorf("gagal dial target: %w", lastErr) }
+	if conn == nil {
+		return nil, fmt.Errorf("gagal dial target: %w", lastErr)
+	}
 
 	if t.cfg.NoDelay {
-		if tc, ok := conn.(*net.TCPConn); ok { tc.SetNoDelay(true) }
+		if tc, ok := conn.(*net.TCPConn); ok {
+			tc.SetNoDelay(true)
+		}
 	}
 
 	if payload != "" {
 		if err := injectSplit(payload, conn); err != nil {
-			conn.Close(); return nil, err
+			conn.Close()
+			return nil, err
 		}
 	}
 
@@ -236,14 +365,26 @@ func (t *SSHTunnel) openRawConn() (net.Conn, error) {
 		conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 		for i := 0; i < 10; i++ {
 			peek, err := br.Peek(4)
-			if err != nil { break }
-			if string(peek) == "SSH-" { break }
-			if string(peek) != "HTTP" { break }
+			if err != nil {
+				break
+			}
+			if string(peek) == "SSH-" {
+				break
+			}
+			if string(peek) != "HTTP" {
+				break
+			}
 
 			first, err := br.ReadString('\n')
-			if err != nil { conn.Close(); return nil, fmt.Errorf("proxy tidak merespon: %w", err) }
+			if err != nil {
+				conn.Close()
+				return nil, fmt.Errorf("proxy tidak merespon: %w", err)
+			}
 			parts := strings.SplitN(strings.TrimRight(first, "\r\n"), " ", 3)
-			if len(parts) < 2 { conn.Close(); return nil, fmt.Errorf("malformed HTTP status") }
+			if len(parts) < 2 {
+				conn.Close()
+				return nil, fmt.Errorf("malformed HTTP status")
+			}
 			statusCode := parts[1]
 			is1xx := strings.HasPrefix(statusCode, "1")
 			is204or304 := statusCode == "204" || statusCode == "304"
@@ -253,34 +394,56 @@ func (t *SSHTunnel) openRawConn() (net.Conn, error) {
 
 			for j := 0; j < 200; j++ {
 				line, err := br.ReadString('\n')
-				if err != nil { break }
+				if err != nil {
+					break
+				}
 				trimmed := strings.TrimRight(line, "\r\n")
-				if trimmed == "" { break }
+				if trimmed == "" {
+					break
+				}
 				lower := strings.ToLower(trimmed)
 				if strings.HasPrefix(lower, "content-length:") {
 					v := strings.TrimSpace(trimmed[len("content-length:"):])
-					if n, e := strconv.ParseInt(v, 10, 64); e == nil { contentLength = n }
+					if n, e := strconv.ParseInt(v, 10, 64); e == nil {
+						contentLength = n
+					}
 				}
-				if strings.HasPrefix(lower, "transfer-encoding:") && strings.Contains(lower, "chunked") { isChunked = true }
-				if strings.HasPrefix(lower, "connection:") && strings.Contains(lower, "close") { hasConnectionClose = true }
+				if strings.HasPrefix(lower, "transfer-encoding:") && strings.Contains(lower, "chunked") {
+					isChunked = true
+				}
+				if strings.HasPrefix(lower, "connection:") && strings.Contains(lower, "close") {
+					hasConnectionClose = true
+				}
 			}
 
-			if is1xx || is204or304 { continue }
+			if is1xx || is204or304 {
+				continue
+			}
 			if contentLength > 0 {
 				io.CopyN(io.Discard, br, contentLength)
 			} else if isChunked {
 				for j := 0; j < 10000; j++ {
 					sizeLine, err := br.ReadString('\n')
-					if err != nil { break }
+					if err != nil {
+						break
+					}
 					sizeLine = strings.TrimSpace(sizeLine)
-					if idx := strings.IndexByte(sizeLine, ';'); idx >= 0 { sizeLine = sizeLine[:idx] }
-					if sizeLine == "" { continue }
+					if idx := strings.IndexByte(sizeLine, ';'); idx >= 0 {
+						sizeLine = sizeLine[:idx]
+					}
+					if sizeLine == "" {
+						continue
+					}
 					chunkSize, err := strconv.ParseInt(sizeLine, 16, 64)
-					if err != nil { break }
+					if err != nil {
+						break
+					}
 					if chunkSize == 0 {
 						for k := 0; k < 20; k++ {
 							tl, terr := br.ReadString('\n')
-							if terr != nil || strings.TrimRight(tl, "\r\n") == "" { break }
+							if terr != nil || strings.TrimRight(tl, "\r\n") == "" {
+								break
+							}
 						}
 						break
 					}
@@ -305,53 +468,84 @@ type bufioConn struct {
 func (c *bufioConn) Read(b []byte) (int, error) { return c.r.Read(b) }
 
 func (t *SSHTunnel) dialOnce() error {
-	auths, err := t.buildAuth()
-	if err != nil { return err }
+	acct := t.currentAccount()
+
+	auths, err := t.buildAuth(acct)
+	if err != nil {
+		return err
+	}
 	sshCfg := &ssh.ClientConfig{
-		User:            t.cfg.Username,
+		User:            acct.Username,
 		Auth:            auths,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         20 * time.Second,
 	}
 
-	raw, err := t.openRawConn()
-	if err != nil { return err }
+	raw, err := t.openRawConn(acct)
+	if err != nil {
+		return err
+	}
 
 	mon := &monitoredConn{Conn: raw, onClose: func(e error) {
-		select { case t.disconCh <- e: default: }
+		select {
+		case t.disconCh <- e:
+		default:
+		}
 	}}
 
-	addr := net.JoinHostPort(t.cfg.Server, strconv.Itoa(t.cfg.ServerPort))
+	addr := net.JoinHostPort(acct.Server, strconv.Itoa(acct.ServerPort))
 	sshConn, chans, reqs, err := ssh.NewClientConn(mon, addr, sshCfg)
-	if err != nil { raw.Close(); return fmt.Errorf("handshake SSH: %w", err) }
+	if err != nil {
+		raw.Close()
+		return fmt.Errorf("handshake SSH (%s@%s): %w", acct.Username, addr, err)
+	}
 
 	client := ssh.NewClient(sshConn, chans, reqs)
 
 	warmupTarget := t.cfg.HealthCheck.Target
-	if warmupTarget == "" { warmupTarget = "1.1.1.1:53" }
+	if warmupTarget == "" {
+		warmupTarget = "1.1.1.1:53"
+	}
 	var warmupErr error
 	for attempt := 1; attempt <= 3; attempt++ {
 		wc, werr := dialSSHWithTimeout(client, "tcp", warmupTarget, warmupDialTimeout)
-		if werr == nil { wc.Close(); warmupErr = nil; break }
+		if werr == nil {
+			wc.Close()
+			warmupErr = nil
+			break
+		}
 		warmupErr = werr
-		if attempt < 3 { time.Sleep(300 * time.Millisecond) }
+		if attempt < 3 {
+			time.Sleep(300 * time.Millisecond)
+		}
 	}
-	if warmupErr != nil { client.Close(); return fmt.Errorf("warmup gagal 3x: %w", warmupErr) }
+	if warmupErr != nil {
+		client.Close()
+		return fmt.Errorf("warmup gagal 3x: %w", warmupErr)
+	}
 
-	t.mu.Lock(); t.client = client; t.mu.Unlock()
+	t.mu.Lock()
+	t.client = client
+	t.mu.Unlock()
 	t.connected.Store(true)
 
-	t.logger.Info("SSH tersambung ke %s", addr)
-	if t.cfg.Pinger > 0 { go t.pinger(client) }
+	t.logger.Info("SSH tersambung ke %s (user=%s)", addr, acct.Username)
+	if t.cfg.Pinger > 0 {
+		go t.pinger(client)
+	}
 	return nil
 }
 
 func (t *SSHTunnel) pinger(client *ssh.Client) {
 	for {
-		if !t.connected.Load() { return }
+		if !t.connected.Load() {
+			return
+		}
 		minSec := t.cfg.Pinger
 		maxSec := t.cfg.PingerMax
-		if maxSec <= minSec { maxSec = minSec }
+		if maxSec <= minSec {
+			maxSec = minSec
+		}
 
 		var waitSec int
 		if maxSec > minSec {
@@ -362,7 +556,9 @@ func (t *SSHTunnel) pinger(client *ssh.Client) {
 		}
 
 		time.Sleep(time.Duration(waitSec) * time.Second)
-		if !t.connected.Load() { return }
+		if !t.connected.Load() {
+			return
+		}
 
 		// Timeout 5 detik untuk mencegah zombie connection
 		done := make(chan error, 1)
@@ -376,14 +572,20 @@ func (t *SSHTunnel) pinger(client *ssh.Client) {
 			if err != nil {
 				t.logger.Warn("Ping gagal → paksa reconnect: %v", err)
 				client.Close()
-				select { case t.disconCh <- err: default: }
+				select {
+				case t.disconCh <- err:
+				default:
+				}
 				return
 			}
 		case <-time.After(5 * time.Second):
 			err := fmt.Errorf("ping timeout 5s (koneksi mati diam-diam)")
 			t.logger.Warn("%v → paksa reconnect", err)
 			client.Close()
-			select { case t.disconCh <- err: default: }
+			select {
+			case t.disconCh <- err:
+			default:
+			}
 			return
 		}
 	}
@@ -391,25 +593,38 @@ func (t *SSHTunnel) pinger(client *ssh.Client) {
 
 func (t *SSHTunnel) cleanup() {
 	t.mu.Lock()
-	if t.client != nil { t.client.Close() }
+	if t.client != nil {
+		t.client.Close()
+	}
 	t.client = nil
 	t.mu.Unlock()
 	t.connected.Store(false)
-	select { case <-t.disconCh: default: }
+	select {
+	case <-t.disconCh:
+	default:
+	}
 }
 
 func (t *SSHTunnel) Run(ctx context.Context) {
 	backoff := t.cfg.Reconnect.InitialDelay.D()
 	for {
-		if ctx.Err() != nil { t.cleanup(); return }
+		if ctx.Err() != nil {
+			t.cleanup()
+			return
+		}
 
 		t.setState("connecting")
 		if err := t.dialOnce(); err != nil {
 			t.lastErr.Store(err.Error())
+			if t.onDialFailure(err) {
+				// Akun baru — beri kesempatan dengan backoff yang di-reset
+				backoff = t.cfg.Reconnect.InitialDelay.D()
+			}
 			t.trackReconnectAndRotate()
 			t.waitBackoff(ctx, &backoff)
 			continue
 		}
+		t.onDialSuccess()
 
 		select {
 		case err := <-t.disconCh:
@@ -433,16 +648,20 @@ func (t *SSHTunnel) Run(ctx context.Context) {
 			t.reconnect.Add(1)
 			now := time.Now().Unix()
 			t.lastReconnect.Store(now)
-			
+
 			t.reconnMu.Lock()
 			t.reconnectHistory = append(t.reconnectHistory, now)
-			if len(t.reconnectHistory) > 50 { t.reconnectHistory = t.reconnectHistory[1:] }
+			if len(t.reconnectHistory) > 50 {
+				t.reconnectHistory = t.reconnectHistory[1:]
+			}
 			t.reconnMu.Unlock()
-			
+
 			t.trackReconnectAndRotate()
 		}
 
-		if !t.cfg.Reconnect.Enabled { return }
+		if !t.cfg.Reconnect.Enabled {
+			return
+		}
 		t.waitBackoff(ctx, &backoff)
 	}
 }
@@ -453,33 +672,43 @@ func (t *SSHTunnel) waitBackoff(ctx context.Context, backoff *time.Duration) {
 	wait := *backoff + time.Duration(nBig.Int64())
 	t.logger.Info("Reconnect dalam %s...", wait)
 	select {
-	case <-ctx.Done(): return
+	case <-ctx.Done():
+		return
 	case <-time.After(wait):
 	}
 	*backoff *= 2
-	if *backoff > t.cfg.Reconnect.MaxDelay.D() { *backoff = t.cfg.Reconnect.MaxDelay.D() }
+	if *backoff > t.cfg.Reconnect.MaxDelay.D() {
+		*backoff = t.cfg.Reconnect.MaxDelay.D()
+	}
 }
 
 func (t *SSHTunnel) StartHealthLoop(ctx context.Context) {
-	if !t.cfg.HealthCheck.Enabled { return }
+	if !t.cfg.HealthCheck.Enabled {
+		return
+	}
 	go func() {
 		failures := 0
 		tk := time.NewTicker(t.cfg.HealthCheck.Interval.D())
 		defer tk.Stop()
 		for {
 			select {
-			case <-ctx.Done(): return
+			case <-ctx.Done():
+				return
 			case <-tk.C:
 			}
 			c := t.GetClient()
-			if c == nil { continue }
+			if c == nil {
+				continue
+			}
 			conn, err := dialSSHWithTimeout(c, "tcp", t.cfg.HealthCheck.Target, t.cfg.HealthCheck.Timeout.D())
 			if err != nil {
 				failures++
 				t.logger.Warn("Health check gagal (%d/%d): %v", failures, t.cfg.HealthCheck.FailureThreshold, err)
 				if failures >= t.cfg.HealthCheck.FailureThreshold {
 					t.mu.Lock()
-					if t.client != nil { t.client.Close() }
+					if t.client != nil {
+						t.client.Close()
+					}
 					t.mu.Unlock()
 					failures = 0
 				}
