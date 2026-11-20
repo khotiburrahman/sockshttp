@@ -44,18 +44,18 @@ type APIServer struct {
 
 func NewAPIServer(cfg *Config, logger *Logger, tunnel *SSHTunnel, pm *ProxyManager, tr *ConnTracker, dns *DNSServer, router *Router, limiter *BandwidthLimiter, realCache *RealIPCache, dynRules *DynamicRules) *APIServer {
 	a := &APIServer{
-		cfg:       cfg,
-		logger:    logger,
-		tunnel:    tunnel,
-		proxyMgr:  pm,
-		tracker:   tr,
-		dns:       dns,
-		router:    router,
-		limiter:   limiter,
-		realCache: realCache,
-		dynRules:  dynRules,
-		start:     time.Now(),
-		done:      make(chan struct{}),
+		cfg:        cfg,
+		logger:     logger,
+		tunnel:     tunnel,
+		proxyMgr:   pm,
+		tracker:    tr,
+		dns:        dns,
+		router:     router,
+		limiter:    limiter,
+		realCache:  realCache,
+		dynRules:   dynRules,
+		start:      time.Now(),
+		done:       make(chan struct{}),
 		maxTraffic: 120,
 	}
 	go a.rateSampler()
@@ -76,8 +76,12 @@ func (a *APIServer) rateSampler() {
 		totalDown := a.tracker.TotalDown.Load()
 		up := totalUp - lastUp
 		down := totalDown - lastDown
-		if up < 0 { up = 0 }
-		if down < 0 { down = 0 }
+		if up < 0 {
+			up = 0
+		}
+		if down < 0 {
+			down = 0
+		}
 		lastUp = totalUp
 		lastDown = totalDown
 		a.speedMu.Lock()
@@ -112,6 +116,11 @@ func (a *APIServer) Start() error {
 	mux.HandleFunc("/api/config", a.auth(a.handleConfig))
 	mux.HandleFunc("/api/limiter", a.auth(a.handleLimiter))
 	mux.HandleFunc("/api/limiter/", a.auth(a.handleLimiterAction))
+
+	// SSH account management
+	mux.HandleFunc("/api/ssh/accounts", a.auth(a.handleSSHAccounts))
+	mux.HandleFunc("/api/ssh/switch", a.auth(a.handleSSHSwitch))
+	mux.HandleFunc("/api/connections/reject-all", a.auth(a.handleRejectAll))
 
 	a.srv = &http.Server{Addr: a.cfg.API.Bind, Handler: mux}
 	go func() {
@@ -163,13 +172,26 @@ func (a *APIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	copy(hist, a.tunnel.reconnectHistory)
 	a.tunnel.reconnMu.Unlock()
 
+	// Info akun SSH aktif
+	var sshName string
+	var sshIdx, sshTotal int
+	accounts := a.tunnel.ListAccounts()
+	sshTotal = len(accounts)
+	for _, acc := range accounts {
+		if acc.Current {
+			sshName = acc.Name
+			sshIdx = acc.Index + 1
+			break
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"version":           Version,
 		"state":             a.tunnel.State(),
 		"uptime_sec":        int(time.Since(a.start).Seconds()),
 		"server":            fmt.Sprintf("%s:%d", a.cfg.Server, a.cfg.ServerPort),
-		"proxy_port":        a.tunnel.GetCurrentPort(), // Info Port Rotasi Aktif
+		"proxy_port":        a.tunnel.GetCurrentPort(),
 		"reconnects":        a.tunnel.reconnect.Load(),
 		"last_reconnect":    a.tunnel.lastReconnect.Load(),
 		"reconnect_history": hist,
@@ -183,6 +205,11 @@ func (a *APIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"speed_down":        down,
 		"active_conns":      a.tracker.ActiveCount(),
 		"closed_conns":      a.tracker.ClosedCount(),
+		"ssh_account": map[string]any{
+			"name":     sshName,
+			"position": sshIdx,
+			"total":    sshTotal,
+		},
 	})
 }
 
@@ -353,9 +380,22 @@ func (a *APIServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 func (a *APIServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
-	// Ambil info dari dynamic rules untuk ditampilkan di UI
+
 	rotateEnabled, rotatePorts, rotateMax, rotateWin := a.dynRules.GetProxyRotate()
+
+	// Daftar akun SSH (tanpa password)
+	accs := a.tunnel.ListAccounts()
+	accView := make([]map[string]any, 0, len(accs))
+	for _, acc := range accs {
+		accView = append(accView, map[string]any{
+			"index":    acc.Index,
+			"name":     acc.Name,
+			"server":   acc.Server,
+			"port":     acc.Port,
+			"username": acc.Username,
+			"current":  acc.Current,
+		})
+	}
 
 	json.NewEncoder(w).Encode(map[string]any{
 		"version":         Version,
@@ -382,7 +422,8 @@ func (a *APIServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 				"window":      rotateWin.String(),
 			},
 		},
-		"rules": a.cfg.Rules,
+		"ssh_accounts": accView,
+		"rules":        a.cfg.Rules,
 	})
 }
 
@@ -432,6 +473,57 @@ func (a *APIServer) handleLimiterAction(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
+
+// --- SSH account management (baru) --------------------------------------
+
+func (a *APIServer) handleSSHAccounts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"accounts": a.tunnel.ListAccounts(),
+		"state":    a.tunnel.State(),
+	})
+}
+
+func (a *APIServer) handleSSHSwitch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" && r.Method != "PUT" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	var body struct {
+		Index int `json:"index"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json: "+err.Error(), 400)
+		return
+	}
+	if err := a.tunnel.SwitchToAccount(body.Index); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	a.logger.Info("SSH switch via API → account index %d", body.Index)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "current": body.Index})
+}
+
+func (a *APIServer) handleRejectAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	n := a.tracker.ForceCloseAll("ui-reject-all")
+	// Sekaligus beri tahu tunnel agar semua yang masih menggantung di sisi
+	// SSH channel juga ikut diputus.
+	a.tunnel.RejectAllConnections("ui-reject-all")
+	a.logger.Warn("Reject-all dari UI: %d koneksi aktif diputus", n)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "closed": n})
+}
+
+// --- UI / auth ----------------------------------------------------------
 
 func (a *APIServer) handleUI(w http.ResponseWriter, r *http.Request) {
 	if a.cfg.API.Secret != "" {
