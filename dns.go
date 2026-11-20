@@ -159,6 +159,7 @@ type DNSServer struct {
 	logger    *Logger
 	realCache *RealIPCache
 	tunnel    *SSHTunnel
+ adblocker *Adblocker
 	udpConn   *net.UDPConn
 	tcpLn     net.Listener
 	closed    atomic.Bool
@@ -174,6 +175,7 @@ func NewDNSServer(cfg *Config, logger *Logger, realCache *RealIPCache, tunnel *S
 		logger:    logger,
 		realCache: realCache,
 		tunnel:    tunnel,
+  adblocker: ab,
 		fwdCache:  newDNSForwardCache(),
 	}
 }
@@ -284,6 +286,11 @@ func (d *DNSServer) handleQuery(q []byte) []byte {
 	pos += 4
 	questionEnd := pos
 	domain := strings.Join(labels, ".")
+
+	if d.adblocker != nil && d.adblocker.IsBlocked(domain) {
+		d.logger.Debug("DNS: %s diblokir oleh Adblock", domain)
+		return d.buildBlockedResponse(q, questionEnd, qtype)
+	}
 
 	// AAAA: tidak ada IPv6 di tunnel ini → balas empty NOERROR tanpa forward.
 	// Ini memaksa client Happy Eyeballs fallback ke IPv4.
@@ -449,6 +456,42 @@ func (d *DNSServer) buildErrorResponse(q []byte, questionEnd, rcode int) []byte 
 	for i := 6; i < 12; i++ {
 		resp[i] = 0
 	}
+	return resp
+}
+
+func (d *DNSServer) buildBlockedResponse(q []byte, questionEnd int, qtype uint16) []byte {
+	// Jika query bukan A record (1), cukup kembalikan NXDOMAIN
+	if qtype != 1 {
+		return d.buildErrorResponse(q, questionEnd, 3)
+	}
+
+	// Jika A record (IPv4), kembalikan 0.0.0.0
+	answer := []byte{
+		0xC0, 0x0C,                   // Name (pointer ke offset 12)
+		0x00, 0x01,                   // Type A
+		0x00, 0x01,                   // Class IN
+		0x00, 0x00, 0x00, 0x3C,       // TTL 60 detik
+		0x00, 0x04,                   // RDLENGTH 4
+		0x00, 0x00, 0x00, 0x00,       // IP 0.0.0.0
+	}
+
+	resp := make([]byte, len(q[:questionEnd])+len(answer))
+	copy(resp, q[:questionEnd])
+	
+	// Flags: QR=1, RD=1, RA=1, RCODE=0
+	resp[2] = 0x81
+	resp[3] = 0x80
+	
+	// ANCOUNT = 1
+	resp[6] = 0x00
+	resp[7] = 0x01
+	
+	// NSCOUNT, ARCOUNT = 0
+	resp[8] = 0x00; resp[9] = 0x00
+	resp[10] = 0x00; resp[11] = 0x00
+	
+	copy(resp[questionEnd:], answer)
+	
 	return resp
 }
 
