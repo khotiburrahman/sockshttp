@@ -22,6 +22,8 @@ import (
 const tunnelDialTimeout = 5 * time.Second
 const warmupDialTimeout = 3 * time.Second
 
+var ErrNoSSHAccounts = errors.New("tidak ada akun SSH terdaftar")
+
 type monitoredConn struct {
 	net.Conn
 	onClose func(error)
@@ -86,6 +88,16 @@ func isAuthError(err error) bool {
 		strings.Contains(s, "no supported methods remain")
 }
 
+// AccountInfo — representasi akun SSH untuk API/UI.
+type AccountInfo struct {
+	Index    int    `json:"index"`
+	Name     string `json:"name"`
+	Server   string `json:"server"`
+	Port     int    `json:"port"`
+	Username string `json:"username"`
+	Current  bool   `json:"current"`
+}
+
 type SSHTunnel struct {
 	cfg           *Config
 	logger        *Logger
@@ -112,14 +124,15 @@ type SSHTunnel struct {
 	rotIndex int
 	rotFails int
 
+	// Interrupt backoff untuk manual switch
+	switchCh chan struct{}
+
 	// Callback dipanggil setelah client ditutup (untuk force-close semua conn user-side)
-	// Disimpan sebagai atomic.Value bertipe func(string) agar aman tanpa lock.
 	onClientClosed atomic.Value
 }
 
 // SetOnClientClosed mendaftarkan callback yang dipanggil setiap kali SSH client
-// di-close (putus, rotasi akun, shutdown). Gunakan untuk force-close semua
-// koneksi user-side agar app tidak menunggu timeout TCP.
+// di-close (putus, rotasi akun, manual switch, atau "reject-all" dari UI).
 func (t *SSHTunnel) SetOnClientClosed(fn func(reason string)) {
 	t.onClientClosed.Store(fn)
 }
@@ -134,7 +147,8 @@ func (t *SSHTunnel) fireClientClosed(reason string) {
 
 func NewSSHTunnel(cfg *Config, logger *Logger, dynRules *DynamicRules) *SSHTunnel {
 	t := &SSHTunnel{
-		cfg: cfg, logger: logger, disconCh: make(chan error, 1), dynamicRules: dynRules,
+		cfg: cfg, logger: logger, disconCh: make(chan error, 1),
+		dynamicRules: dynRules, switchCh: make(chan struct{}, 1),
 	}
 	t.state.Store("disconnected")
 
@@ -167,7 +181,6 @@ func (t *SSHTunnel) trackReconnectAndRotate() {
 	if !enabled || len(ports) <= 1 {
 		return
 	}
-
 	t.proxyPortMu.Lock()
 	defer t.proxyPortMu.Unlock()
 
@@ -185,7 +198,8 @@ func (t *SSHTunnel) trackReconnectAndRotate() {
 		oldPort := t.currentPort
 		t.portIndex = (t.portIndex + 1) % len(ports)
 		t.currentPort = ports[t.portIndex]
-		t.logger.Warn("[tunnel] Terdeteksi %d kegagalan dalam %v. Rotasi port proxy: %d -> %d", len(t.connHistory), window, oldPort, t.currentPort)
+		t.logger.Warn("[tunnel] Terdeteksi %d kegagalan dalam %v. Rotasi port proxy: %d -> %d",
+			len(t.connHistory), window, oldPort, t.currentPort)
 		t.connHistory = nil
 	}
 }
@@ -206,14 +220,14 @@ func (t *SSHTunnel) Dial(network, addr string) (net.Conn, error) {
 	return dialSSHWithTimeout(c, network, addr, tunnelDialTimeout)
 }
 
-// --- Rotator akun ---------------------------------------------------------
+// --- Rotator & UI API -----------------------------------------------------
 
-func (t *SSHTunnel) currentAccount() SSHAccount {
+func (t *SSHTunnel) currentAccountWithIndex() (int, SSHAccount) {
 	t.rotMu.Lock()
 	defer t.rotMu.Unlock()
 
 	if len(t.cfg.SSHAccounts) == 0 {
-		return SSHAccount{
+		return -1, SSHAccount{
 			Server: t.cfg.Server, ServerPort: t.cfg.ServerPort,
 			Username: t.cfg.Username, Password: t.cfg.Password, KeyPath: t.cfg.KeyPath,
 		}
@@ -221,7 +235,82 @@ func (t *SSHTunnel) currentAccount() SSHAccount {
 	if t.rotIndex >= len(t.cfg.SSHAccounts) || t.rotIndex < 0 {
 		t.rotIndex = 0
 	}
-	return t.cfg.SSHAccounts[t.rotIndex]
+	return t.rotIndex, t.cfg.SSHAccounts[t.rotIndex]
+}
+
+// ListAccounts mengembalikan snapshot akun-akun SSH untuk UI.
+func (t *SSHTunnel) ListAccounts() []AccountInfo {
+	t.rotMu.Lock()
+	defer t.rotMu.Unlock()
+
+	out := make([]AccountInfo, 0, len(t.cfg.SSHAccounts))
+	for i, a := range t.cfg.SSHAccounts {
+		name := a.Name
+		if name == "" {
+			name = fmt.Sprintf("Account-%d", i+1)
+		}
+		out = append(out, AccountInfo{
+			Index:    i,
+			Name:     name,
+			Server:   a.Server,
+			Port:     a.ServerPort,
+			Username: a.Username,
+			Current:  i == t.rotIndex,
+		})
+	}
+	return out
+}
+
+// SwitchToAccount memindahkan akun aktif secara manual, memutus koneksi SSH
+// saat ini, dan langsung reconnect ke akun baru (tanpa menunggu backoff).
+func (t *SSHTunnel) SwitchToAccount(idx int) error {
+	t.rotMu.Lock()
+	if len(t.cfg.SSHAccounts) == 0 {
+		t.rotMu.Unlock()
+		return ErrNoSSHAccounts
+	}
+	if idx < 0 || idx >= len(t.cfg.SSHAccounts) {
+		total := len(t.cfg.SSHAccounts)
+		t.rotMu.Unlock()
+		return fmt.Errorf("index akun tidak valid: %d (range 0..%d)", idx, total-1)
+	}
+	oldIdx := t.rotIndex
+	if oldIdx == idx {
+		t.rotMu.Unlock()
+		return nil
+	}
+	t.rotIndex = idx
+	t.rotFails = 0
+	acct := t.cfg.SSHAccounts[idx]
+	t.rotMu.Unlock()
+
+	t.logger.Warn("[ssh-rotate] MANUAL switch akun %d -> %d (%s@%s:%d)",
+		oldIdx+1, idx+1, acct.Username, acct.Server, acct.ServerPort)
+
+	// Interrupt backoff jika sedang tidur
+	select {
+	case t.switchCh <- struct{}{}:
+	default:
+	}
+
+	// Paksa putus koneksi saat ini (jika ada) → trigger reconnect
+	t.mu.Lock()
+	if t.client != nil {
+		t.client.Close()
+	}
+	t.mu.Unlock()
+
+	return nil
+}
+
+// RejectAllConnections menutup SEMUA koneksi user-side (SOCKS5/DNS/Router)
+// tanpa memutus SSH. Bisa dipakai sebagai "panic button" ketika ada koneksi macet.
+func (t *SSHTunnel) RejectAllConnections(reason string) {
+	if reason == "" {
+		reason = "manual-reject-all"
+	}
+	t.logger.Warn("[tunnel] reject-all dari UI (reason=%s)", reason)
+	t.fireClientClosed(reason)
 }
 
 func (t *SSHTunnel) onDialSuccess() {
@@ -231,11 +320,18 @@ func (t *SSHTunnel) onDialSuccess() {
 }
 
 // onDialFailure mengembalikan true jika akun sudah dirotasi.
-func (t *SSHTunnel) onDialFailure(err error) (rotated bool) {
+func (t *SSHTunnel) onDialFailure(acctIdx int, err error) (rotated bool) {
 	t.rotMu.Lock()
 	defer t.rotMu.Unlock()
 
-	if len(t.cfg.SSHAccounts) <= 1 {
+	if acctIdx < 0 || len(t.cfg.SSHAccounts) <= 1 {
+		return false
+	}
+
+	// Manual switch terjadi selama dial — abaikan failure dari akun lama
+	if t.rotIndex != acctIdx {
+		t.logger.Debug("[ssh-rotate] kegagalan dari akun lama %d diabaikan (rotIndex sekarang %d)",
+			acctIdx, t.rotIndex)
 		return false
 	}
 
@@ -486,12 +582,12 @@ type bufioConn struct {
 
 func (c *bufioConn) Read(b []byte) (int, error) { return c.r.Read(b) }
 
-func (t *SSHTunnel) dialOnce() error {
-	acct := t.currentAccount()
+func (t *SSHTunnel) dialOnce() (int, error) {
+	acctIdx, acct := t.currentAccountWithIndex()
 
 	auths, err := t.buildAuth(acct)
 	if err != nil {
-		return err
+		return acctIdx, err
 	}
 	sshCfg := &ssh.ClientConfig{
 		User:            acct.Username,
@@ -502,7 +598,7 @@ func (t *SSHTunnel) dialOnce() error {
 
 	raw, err := t.openRawConn(acct)
 	if err != nil {
-		return err
+		return acctIdx, err
 	}
 
 	mon := &monitoredConn{Conn: raw, onClose: func(e error) {
@@ -516,7 +612,7 @@ func (t *SSHTunnel) dialOnce() error {
 	sshConn, chans, reqs, err := ssh.NewClientConn(mon, addr, sshCfg)
 	if err != nil {
 		raw.Close()
-		return fmt.Errorf("handshake SSH (%s@%s): %w", acct.Username, addr, err)
+		return acctIdx, fmt.Errorf("handshake SSH (%s@%s): %w", acct.Username, addr, err)
 	}
 
 	client := ssh.NewClient(sshConn, chans, reqs)
@@ -540,19 +636,32 @@ func (t *SSHTunnel) dialOnce() error {
 	}
 	if warmupErr != nil {
 		client.Close()
-		return fmt.Errorf("warmup gagal 3x: %w", warmupErr)
+		return acctIdx, fmt.Errorf("warmup gagal 3x: %w", warmupErr)
 	}
 
 	t.mu.Lock()
 	t.client = client
 	t.mu.Unlock()
-	t.connected.Store(true)
 
+	// Race: user menekan "Switch" saat dial sedang berjalan?
+	t.rotMu.Lock()
+	nowIdx := t.rotIndex
+	t.rotMu.Unlock()
+	if nowIdx != acctIdx {
+		t.logger.Info("[ssh-rotate] switch diminta saat dial berlangsung → putuskan koneksi ke akun lama")
+		client.Close()
+		t.mu.Lock()
+		t.client = nil
+		t.mu.Unlock()
+		return acctIdx, fmt.Errorf("manual switch during dial")
+	}
+
+	t.connected.Store(true)
 	t.logger.Info("SSH tersambung ke %s (user=%s)", addr, acct.Username)
 	if t.cfg.Pinger > 0 {
 		go t.pinger(client)
 	}
-	return nil
+	return acctIdx, nil
 }
 
 func (t *SSHTunnel) pinger(client *ssh.Client) {
@@ -619,7 +728,6 @@ func (t *SSHTunnel) cleanup() {
 	t.mu.Unlock()
 	t.connected.Store(false)
 
-	// Beri tahu pemilik tracker agar semua conn user-side dipaksa tutup.
 	if had {
 		t.fireClientClosed("tunnel-closed")
 	}
@@ -641,28 +749,23 @@ func (t *SSHTunnel) Run(ctx context.Context) {
 		}
 
 		t.setState("connecting")
-		if err := t.dialOnce(); err != nil {
+		acctIdx, err := t.dialOnce()
+		if err != nil {
 			t.lastErr.Store(err.Error())
-			rotated := t.onDialFailure(err)
+			rotated := t.onDialFailure(acctIdx, err)
 			t.trackReconnectAndRotate()
 
 			if rotated {
-				// Paksa tutup sisa client lama + semua conn user-side
 				t.cleanup()
-
-				// Reset backoff — akun baru layak dicoba cepat
 				backoff = t.cfg.Reconnect.InitialDelay.D()
 				consecutiveRotations++
 
 				if consecutiveRotations >= len(t.cfg.SSHAccounts) {
-					// Satu putaran penuh gagal — kembali ke backoff normal
-					// supaya tidak busy-loop ketika semua akun bermasalah.
 					t.logger.Warn("[ssh-rotate] seluruh %d akun gagal dalam 1 putaran, kembali pakai backoff",
 						len(t.cfg.SSHAccounts))
 					consecutiveRotations = 0
 					t.waitBackoff(ctx, &backoff)
 				} else {
-					// Retry langsung (delay kecil untuk cegah tight-loop instan)
 					select {
 					case <-ctx.Done():
 						t.cleanup()
@@ -726,6 +829,11 @@ func (t *SSHTunnel) waitBackoff(ctx context.Context, backoff *time.Duration) {
 	t.logger.Info("Reconnect dalam %s...", wait)
 	select {
 	case <-ctx.Done():
+		return
+	case <-t.switchCh:
+		// Interupsi manual switch
+		*backoff = t.cfg.Reconnect.InitialDelay.D()
+		t.logger.Info("[ssh-rotate] backoff diinterupsi oleh manual switch")
 		return
 	case <-time.After(wait):
 	}
