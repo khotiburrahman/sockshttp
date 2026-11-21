@@ -1,6 +1,7 @@
 package main
 
 import (
+	"container/list"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -37,15 +38,18 @@ func (c *RealIPCache) Set(ip, domain string, ttl time.Duration) {
 	if ip == "" || domain == "" {
 		return
 	}
-	if ttl < 30*time.Second {
-		ttl = 30 * time.Second
+	// Clamp ke [60s, 3600s] — selaras dengan fwdCache TTL
+	if ttl < 60*time.Second {
+		ttl = 60 * time.Second
 	}
-	if ttl > 300*time.Second {
-		ttl = 300 * time.Second
+	if ttl > 3600*time.Second {
+		ttl = 3600 * time.Second
 	}
 	c.mu.Lock()
 	c.data[ip] = realIPEntry{domain: domain, expire: time.Now().Add(ttl)}
 	if len(c.data) > c.maxSize {
+		// Buang satu entry acak (RealIPCache hanya diakses hot path,
+		// tidak pakai LRU agar RLock Lookup tetap murah).
 		for k := range c.data {
 			delete(c.data, k)
 			break
@@ -105,20 +109,29 @@ func (c *RealIPCache) PruneLoop(ctx context.Context) {
 }
 
 // ============================================================
-// dnsForwardCache — cache response yang sudah di-strip AAAA
+// dnsForwardCache — cache response DNS dengan LRU.
 // ============================================================
 type cachedDNS struct {
 	resp   []byte
 	expire time.Time
+	elem   *list.Element
 }
 
 type dnsForwardCache struct {
-	mu   sync.Mutex
-	data map[string]cachedDNS
+	mu      sync.Mutex
+	data    map[string]*cachedDNS
+	lru     *list.List
+	maxSize int
+	hits    atomic.Int64
+	misses  atomic.Int64
 }
 
 func newDNSForwardCache() *dnsForwardCache {
-	return &dnsForwardCache{data: map[string]cachedDNS{}}
+	return &dnsForwardCache{
+		data:    map[string]*cachedDNS{},
+		lru:     list.New(),
+		maxSize: 20000,
+	}
 }
 
 func (c *dnsForwardCache) Get(key string) ([]byte, bool) {
@@ -126,28 +139,73 @@ func (c *dnsForwardCache) Get(key string) ([]byte, bool) {
 	defer c.mu.Unlock()
 	e, ok := c.data[key]
 	if !ok {
+		c.misses.Add(1)
 		return nil, false
 	}
 	if time.Now().After(e.expire) {
+		c.lru.Remove(e.elem)
 		delete(c.data, key)
+		c.misses.Add(1)
 		return nil, false
 	}
+	c.lru.MoveToFront(e.elem)
+	c.hits.Add(1)
 	out := make([]byte, len(e.resp))
 	copy(out, e.resp)
 	return out, true
 }
 
 func (c *dnsForwardCache) Set(key string, resp []byte, ttl time.Duration) {
+	if ttl <= 0 {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.data[key] = cachedDNS{resp: append([]byte(nil), resp...), expire: time.Now().Add(ttl)}
-	if len(c.data) > 2000 {
-		for k := range c.data {
+
+	// Update entry yang sudah ada
+	if e, ok := c.data[key]; ok {
+		e.resp = append([]byte(nil), resp...)
+		e.expire = time.Now().Add(ttl)
+		c.lru.MoveToFront(e.elem)
+		return
+	}
+
+	// Lazy cleanup entry expired
+	now := time.Now()
+	for k, v := range c.data {
+		if now.After(v.expire) {
+			c.lru.Remove(v.elem)
 			delete(c.data, k)
-			if len(c.data) < 1000 {
-				break
-			}
 		}
+	}
+
+	// Evict LRU (paling belakang) kalau penuh
+	for c.lru.Len() >= c.maxSize {
+		back := c.lru.Back()
+		if back == nil {
+			break
+		}
+		k := back.Value.(string)
+		c.lru.Remove(back)
+		delete(c.data, k)
+	}
+
+	elem := c.lru.PushFront(key)
+	c.data[key] = &cachedDNS{
+		resp:   append([]byte(nil), resp...),
+		expire: time.Now().Add(ttl),
+		elem:   elem,
+	}
+}
+
+func (c *dnsForwardCache) Stats() map[string]int64 {
+	c.mu.Lock()
+	size := len(c.data)
+	c.mu.Unlock()
+	return map[string]int64{
+		"size":   int64(size),
+		"hits":   c.hits.Load(),
+		"misses": c.misses.Load(),
 	}
 }
 
@@ -159,7 +217,7 @@ type DNSServer struct {
 	logger    *Logger
 	realCache *RealIPCache
 	tunnel    *SSHTunnel
-	adblocker *Adblocker // <--- Variabel Adblocker
+	adblocker *Adblocker
 	udpConn   *net.UDPConn
 	tcpLn     net.Listener
 	closed    atomic.Bool
@@ -169,7 +227,6 @@ type DNSServer struct {
 	fwdCache  *dnsForwardCache
 }
 
-// Parameter ab *Adblocker ditambahkan di sini
 func NewDNSServer(cfg *Config, logger *Logger, realCache *RealIPCache, tunnel *SSHTunnel, ab *Adblocker) *DNSServer {
 	return &DNSServer{
 		cfg:       cfg,
@@ -288,17 +345,13 @@ func (d *DNSServer) handleQuery(q []byte) []byte {
 	questionEnd := pos
 	domain := strings.Join(labels, ".")
 
-	// ============================================================
-	// ADBLOCK INTEGRATION
-	// Cek apakah domain ada di dalam daftar blokir (geosite.dat)
-	// ============================================================
+	// Adblock
 	if d.adblocker != nil && d.adblocker.IsBlocked(domain) {
 		d.logger.Debug("DNS: %s diblokir oleh Adblock", domain)
 		return d.buildBlockedResponse(q, questionEnd, qtype)
 	}
 
-	// AAAA: tidak ada IPv6 di tunnel ini → balas empty NOERROR tanpa forward.
-	// Ini memaksa client Happy Eyeballs fallback ke IPv4.
+	// AAAA → empty NOERROR (IPv4-only tunnel)
 	if qtype == 28 {
 		d.logger.Debug("DNS: %s AAAA → empty (IPv4-only tunnel)", domain)
 		return d.buildEmptyResponse(q, questionEnd)
@@ -309,11 +362,16 @@ func (d *DNSServer) handleQuery(q []byte) []byte {
 
 func (d *DNSServer) forwardQuery(q []byte, questionEnd int, domain string, qtype, qclass uint16) []byte {
 	cacheKey := fmt.Sprintf("%s|%d|%d", strings.ToLower(domain), qtype, qclass)
+
+	// --- Cache hit: repopulate RealIPCache ---
 	if cached, ok := d.fwdCache.Get(cacheKey); ok {
 		if len(cached) >= 2 {
 			cached[0] = q[0]
 			cached[1] = q[1]
 		}
+		// Repopulate RealIPCache dari response cached (agar tidak expired
+		// lebih cepat dari fwdCache saat client pakai DNS cache sendiri)
+		d.processResponse(cached, domain)
 		return cached
 	}
 
@@ -356,35 +414,62 @@ func (d *DNSServer) forwardQuery(q []byte, questionEnd int, domain string, qtype
 		return d.buildErrorResponse(q, questionEnd, 2)
 	}
 
-	// Extract A records dari answer section, isi RealIPCache
-	minTTL := d.extractACache(resp, domain)
+	// Proses response: isi RealIPCache + ambil minTTL
+	minTTL, hasAnswer := d.processResponse(resp, domain)
 
-	if len(resp) >= 4 && (resp[3]&0x0F) == 0 {
-		ttl := minTTL
-		if ttl < 30 {
-			ttl = 30
-		}
-		if ttl > 300 {
-			ttl = 300
-		}
-		d.fwdCache.Set(cacheKey, resp, time.Duration(ttl)*time.Second)
+	rcode := uint8(0)
+	if len(resp) >= 4 {
+		rcode = resp[3] & 0x0F
 	}
 
-	d.logger.Debug("DNS forward: %s (type %d) → %d bytes", domain, qtype, respLen)
+	// Tentukan TTL cache berdasarkan rcode
+	var cacheTTL time.Duration
+	switch {
+	case rcode == 0 && hasAnswer:
+		// Positive answer — pakai minTTL dari upstream, clamp [60s, 3600s]
+		if minTTL < 60 {
+			minTTL = 60
+		}
+		if minTTL > 3600 {
+			minTTL = 3600
+		}
+		cacheTTL = time.Duration(minTTL) * time.Second
+	case rcode == 3:
+		// NXDOMAIN — negative cache 30 detik
+		cacheTTL = 30 * time.Second
+	case rcode == 5:
+		// REFUSED — cache pendek
+		cacheTTL = 30 * time.Second
+	case rcode == 0 && !hasAnswer:
+		// NODATA (NOERROR, 0 answer) — cache 60s
+		cacheTTL = 60 * time.Second
+	default:
+		// SERVFAIL dan lainnya — jangan cache
+		cacheTTL = 0
+	}
+
+	if cacheTTL > 0 {
+		d.fwdCache.Set(cacheKey, resp, cacheTTL)
+	}
+
+	d.logger.Debug("DNS forward: %s (type %d) → %d bytes, rcode=%d, ttl=%v",
+		domain, qtype, respLen, rcode, cacheTTL)
 	return resp
 }
 
-// extractACache parse answer section saja, ambil A record, isi RealIPCache.
-// Return minTTL. Tidak memodifikasi resp (AAAA tidak ada di response A).
-func (d *DNSServer) extractACache(resp []byte, domain string) uint32 {
+// processResponse parse answer section: isi RealIPCache untuk A record,
+// dan kembalikan (minTTL, hasAnswer).
+// minTTL dihitung dari A dan CNAME (chain validity).
+func (d *DNSServer) processResponse(resp []byte, domain string) (uint32, bool) {
 	if len(resp) < 12 {
-		return 0
+		return 0, false
 	}
 	ancount := int(binary.BigEndian.Uint16(resp[6:8]))
 	if ancount == 0 {
-		return 0
+		return 0, false
 	}
 
+	// Skip question section
 	pos := 12
 	for pos < len(resp) {
 		l := int(resp[pos])
@@ -399,12 +484,15 @@ func (d *DNSServer) extractACache(resp []byte, domain string) uint32 {
 		pos += l + 1
 	}
 	if pos+4 > len(resp) {
-		return 0
+		return 0, false
 	}
 	pos += 4 // qtype + qclass
 	cur := pos
 
 	var minTTL uint32
+	var aIPs []string
+	hasAnswer := false
+
 	for i := 0; i < ancount && cur < len(resp); i++ {
 		// skip name (compressed or plain)
 		for cur < len(resp) {
@@ -430,23 +518,38 @@ func (d *DNSServer) extractACache(resp []byte, domain string) uint32 {
 		if rdataEnd > len(resp) {
 			break
 		}
-		if rtype == 1 && rdlen == 4 {
-			ip := net.IPv4(resp[rdataStart], resp[rdataStart+1], resp[rdataStart+2], resp[rdataStart+3]).String()
-			d.realCache.Set(ip, domain, time.Duration(ttl)*time.Second)
+
+		// Catat TTL minimum dari A dan CNAME
+		if rtype == 1 || rtype == 5 {
 			if minTTL == 0 || ttl < minTTL {
 				minTTL = ttl
 			}
+			hasAnswer = true
 		}
+
+		// Kumpulkan A record untuk RealIPCache
+		if rtype == 1 && rdlen == 4 {
+			ip := net.IPv4(resp[rdataStart], resp[rdataStart+1], resp[rdataStart+2], resp[rdataStart+3]).String()
+			aIPs = append(aIPs, ip)
+		}
+
 		cur = rdataEnd
 	}
-	return minTTL
+
+	// Set RealIPCache dengan minTTL agar sinkron dengan fwdCache
+	ttlDur := time.Duration(minTTL) * time.Second
+	for _, ip := range aIPs {
+		d.realCache.Set(ip, domain, ttlDur)
+	}
+
+	return minTTL, hasAnswer
 }
 
 func (d *DNSServer) buildEmptyResponse(q []byte, questionEnd int) []byte {
 	resp := make([]byte, questionEnd)
 	copy(resp, q[:questionEnd])
-	resp[2] = 0x81 // QR=1, RD=1
-	resp[3] = 0x80 // RA=1, RCODE=0
+	resp[2] = 0x81
+	resp[3] = 0x80
 	for i := 6; i < 12; i++ {
 		resp[i] = 0
 	}
@@ -464,38 +567,32 @@ func (d *DNSServer) buildErrorResponse(q []byte, questionEnd, rcode int) []byte 
 	return resp
 }
 
-// buildBlockedResponse membuat balasan DNS untuk domain yang diblokir Adblock.
-// Jika query tipe A (IPv4), kembalikan 0.0.0.0. Jika tipe lain, kembalikan NXDOMAIN.
+// buildBlockedResponse — balas 0.0.0.0 untuk A, NXDOMAIN untuk tipe lain
 func (d *DNSServer) buildBlockedResponse(q []byte, questionEnd int, qtype uint16) []byte {
 	if qtype != 1 {
-		return d.buildErrorResponse(q, questionEnd, 3) // NXDOMAIN
+		return d.buildErrorResponse(q, questionEnd, 3)
 	}
 
 	answer := []byte{
-		0xC0, 0x0C,             // Name (pointer ke offset 12)
-		0x00, 0x01,             // Type A
-		0x00, 0x01,             // Class IN
-		0x00, 0x00, 0x00, 0x3C, // TTL 60 detik
-		0x00, 0x04,             // RDLENGTH 4
-		0x00, 0x00, 0x00, 0x00, // IP 0.0.0.0
+		0xC0, 0x0C, // name pointer
+		0x00, 0x01, // type A
+		0x00, 0x01, // class IN
+		0x00, 0x00, 0x00, 0x3C, // TTL 60s
+		0x00, 0x04, // rdlength
+		0x00, 0x00, 0x00, 0x00, // 0.0.0.0
 	}
 
 	resp := make([]byte, len(q[:questionEnd])+len(answer))
 	copy(resp, q[:questionEnd])
-	
-	resp[2] = 0x81 // QR=1, RD=1
-	resp[3] = 0x80 // RA=1, RCODE=0 (No error)
-	
-	// ANCOUNT = 1
+	resp[2] = 0x81
+	resp[3] = 0x80
 	resp[6] = 0x00
 	resp[7] = 0x01
-	
-	// NSCOUNT, ARCOUNT = 0
-	resp[8] = 0x00; resp[9] = 0x00
-	resp[10] = 0x00; resp[11] = 0x00
-	
+	resp[8] = 0x00
+	resp[9] = 0x00
+	resp[10] = 0x00
+	resp[11] = 0x00
 	copy(resp[questionEnd:], answer)
-	
 	return resp
 }
 
