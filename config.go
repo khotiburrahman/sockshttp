@@ -68,6 +68,7 @@ func (d Duration) D() time.Duration { return time.Duration(d) }
 
 // SSHAccount — satu kredensial SSH untuk multi-account rotation.
 type SSHAccount struct {
+	Name       string `yaml:"name,omitempty"` // label untuk UI (opsional, fallback "Account-N")
 	Server     string `yaml:"server"`
 	ServerPort int    `yaml:"server_port"`
 	Username   string `yaml:"username"`
