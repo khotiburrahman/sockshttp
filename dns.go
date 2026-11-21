@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,12 +15,43 @@ import (
 )
 
 // ============================================================
+// Konstanta tuning untuk stale-while-revalidate.
+// ============================================================
+const (
+	// dnsStaleWindow — berapa lama entry yang sudah expired tetap
+	// di-serve (stale) sebelum benar-benar dibuang.
+	dnsStaleWindow = 24 * time.Hour
+
+	// dnsRefreshIdleMax — refresh proaktif hanya dilakukan untuk
+	// entry yang baru dipakai user dalam rentang ini. Setelah idle
+	// melewati batas, refresh berhenti (entry akan jadi stale).
+	dnsRefreshIdleMax = 10 * time.Minute
+
+	// realIPStaleWindow — window stale untuk RealIPCache (lebih pendek
+	// karena IP bisa berubah lebih cepat dari domain).
+	realIPStaleWindow = 1 * time.Hour
+
+	// refreshScanInterval — frekuensi scan cache untuk cari entry
+	// yang sudah masuk window 90% TTL.
+	refreshScanInterval = 5 * time.Second
+
+	// refreshBatchLimit — maksimal entry yang di-refresh per scan.
+	refreshBatchLimit = 32
+
+	// refreshConcurrency — berapa refresh paralel via tunnel.
+	refreshConcurrency = 4
+)
+
+// ============================================================
 // RealIPCache — IP asli → domain, diisi dari DNS forward.
 // Dipakai router untuk reverse lookup hostname (bukan Fake-IP).
+// Mendukung stale serving: entry yang sudah expired tetap dilayani
+// hingga staleUntil habis.
 // ============================================================
 type realIPEntry struct {
-	domain string
-	expire time.Time
+	domain     string
+	expire     time.Time
+	staleUntil time.Time
 }
 
 type RealIPCache struct {
@@ -45,8 +77,13 @@ func (c *RealIPCache) Set(ip, domain string, ttl time.Duration) {
 	if ttl > 3600*time.Second {
 		ttl = 3600 * time.Second
 	}
+	now := time.Now()
 	c.mu.Lock()
-	c.data[ip] = realIPEntry{domain: domain, expire: time.Now().Add(ttl)}
+	c.data[ip] = realIPEntry{
+		domain:     domain,
+		expire:     now.Add(ttl),
+		staleUntil: now.Add(ttl + realIPStaleWindow),
+	}
 	if len(c.data) > c.maxSize {
 		// Buang satu entry acak (RealIPCache hanya diakses hot path,
 		// tidak pakai LRU agar RLock Lookup tetap murah).
@@ -58,6 +95,9 @@ func (c *RealIPCache) Set(ip, domain string, ttl time.Duration) {
 	c.mu.Unlock()
 }
 
+// Lookup — kembalikan domain untuk IP ini. Entry stale (sudah lewat
+// expire tapi belum staleUntil) tetap dilayani agar reverse lookup
+// di router tidak miss hanya karena TTL DNS habis.
 func (c *RealIPCache) Lookup(ip string) (string, bool) {
 	c.mu.RLock()
 	e, ok := c.data[ip]
@@ -66,7 +106,8 @@ func (c *RealIPCache) Lookup(ip string) (string, bool) {
 		c.misses.Add(1)
 		return "", false
 	}
-	if time.Now().After(e.expire) {
+	now := time.Now()
+	if now.After(e.staleUntil) {
 		c.mu.Lock()
 		delete(c.data, ip)
 		c.mu.Unlock()
@@ -99,7 +140,7 @@ func (c *RealIPCache) PruneLoop(ctx context.Context) {
 			now := time.Now()
 			c.mu.Lock()
 			for k, e := range c.data {
-				if now.After(e.expire) {
+				if now.After(e.staleUntil) {
 					delete(c.data, k)
 				}
 			}
@@ -109,12 +150,25 @@ func (c *RealIPCache) PruneLoop(ctx context.Context) {
 }
 
 // ============================================================
-// dnsForwardCache — cache response DNS dengan LRU.
+// dnsForwardCache — cache response DNS dengan LRU + stale serving.
+//
+// Siklus hidup entry:
+//   Set          → expire = now+ttl, refreshAt = now+0.9*ttl,
+//                  staleUntil = now+ttl+dnsStaleWindow
+//   Get (fresh)  → now < expire, serve
+//   Get (stale)  → expire ≤ now < staleUntil, serve + async refresh
+//   Get (dead)   → now ≥ staleUntil, hapus
+//   Refresh      → reset semua timestamp, TANPA MoveToFront
+//                  (posisi LRU hanya ditentukan query user)
 // ============================================================
 type cachedDNS struct {
-	resp   []byte
-	expire time.Time
-	elem   *list.Element
+	resp        []byte
+	expire      time.Time
+	refreshAt   time.Time
+	staleUntil  time.Time
+	lastQueried time.Time
+	refreshing  bool // di akses under dnsForwardCache.mu
+	elem        *list.Element
 }
 
 type dnsForwardCache struct {
@@ -134,27 +188,39 @@ func newDNSForwardCache() *dnsForwardCache {
 	}
 }
 
-func (c *dnsForwardCache) Get(key string) ([]byte, bool) {
+// Get — ambil response. fresh=false berarti entry sudah lewat expire
+// tapi masih dalam staleUntil; caller boleh serve + trigger refresh.
+func (c *dnsForwardCache) Get(key string) (resp []byte, fresh bool, ok bool) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	e, ok := c.data[key]
-	if !ok {
+	e, exists := c.data[key]
+	if !exists {
 		c.misses.Add(1)
-		return nil, false
+		c.mu.Unlock()
+		return nil, false, false
 	}
-	if time.Now().After(e.expire) {
+	now := time.Now()
+
+	// Sudah lewat staleUntil → benar-benar hilang
+	if !now.Before(e.staleUntil) {
 		c.lru.Remove(e.elem)
 		delete(c.data, key)
 		c.misses.Add(1)
-		return nil, false
+		c.mu.Unlock()
+		return nil, false, false
 	}
+
+	e.lastQueried = now
 	c.lru.MoveToFront(e.elem)
 	c.hits.Add(1)
-	out := make([]byte, len(e.resp))
-	copy(out, e.resp)
-	return out, true
+
+	out := append([]byte(nil), e.resp...)
+	isFresh := now.Before(e.expire)
+	c.mu.Unlock()
+	return out, isFresh, true
 }
 
+// Set — dipakai saat user miss → forward sukses. Menandai entry baru
+// dipakai (lastQueried=now) dan memindahkan ke depan LRU.
 func (c *dnsForwardCache) Set(key string, resp []byte, ttl time.Duration) {
 	if ttl <= 0 {
 		return
@@ -162,18 +228,25 @@ func (c *dnsForwardCache) Set(key string, resp []byte, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	now := time.Now()
+	refreshAt := now.Add(ttl * 9 / 10)
+	staleUntil := now.Add(ttl + dnsStaleWindow)
+
 	// Update entry yang sudah ada
 	if e, ok := c.data[key]; ok {
 		e.resp = append([]byte(nil), resp...)
-		e.expire = time.Now().Add(ttl)
+		e.expire = now.Add(ttl)
+		e.refreshAt = refreshAt
+		e.staleUntil = staleUntil
+		e.lastQueried = now
+		e.refreshing = false
 		c.lru.MoveToFront(e.elem)
 		return
 	}
 
-	// Lazy cleanup entry expired
-	now := time.Now()
+	// Lazy cleanup entry yang sudah lewat staleUntil
 	for k, v := range c.data {
-		if now.After(v.expire) {
+		if now.After(v.staleUntil) {
 			c.lru.Remove(v.elem)
 			delete(c.data, k)
 		}
@@ -192,10 +265,86 @@ func (c *dnsForwardCache) Set(key string, resp []byte, ttl time.Duration) {
 
 	elem := c.lru.PushFront(key)
 	c.data[key] = &cachedDNS{
-		resp:   append([]byte(nil), resp...),
-		expire: time.Now().Add(ttl),
-		elem:   elem,
+		resp:        append([]byte(nil), resp...),
+		expire:      now.Add(ttl),
+		refreshAt:   refreshAt,
+		staleUntil:  staleUntil,
+		lastQueried: now,
+		refreshing:  false,
+		elem:        elem,
 	}
+}
+
+// Refresh — dipakai background refresh. Tidak MoveToFront: posisi LRU
+// hanya boleh digeser oleh query user. Refresh hanya update payload.
+func (c *dnsForwardCache) Refresh(key string, resp []byte, ttl time.Duration) {
+	if ttl <= 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.data[key]
+	if !ok {
+		return
+	}
+	now := time.Now()
+	e.resp = append([]byte(nil), resp...)
+	e.expire = now.Add(ttl)
+	e.refreshAt = now.Add(ttl * 9 / 10)
+	e.staleUntil = now.Add(ttl + dnsStaleWindow)
+	e.refreshing = false
+}
+
+// GetRefreshable — kandidat refresh proaktif:
+//   - sudah lewat refreshAt (90% TTL)
+//   - belum expire (masih fresh)
+//   - baru dipakai user dalam idleMax
+//   - tidak sedang di-refresh goroutine lain
+// Entry yang di-pick ditandai refreshing=true agar tidak dobel.
+func (c *dnsForwardCache) GetRefreshable(now time.Time, idleMax time.Duration, limit int) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []string
+	for k, e := range c.data {
+		if e.refreshing {
+			continue
+		}
+		if now.Before(e.refreshAt) || !now.Before(e.expire) {
+			continue
+		}
+		if now.Sub(e.lastQueried) > idleMax {
+			continue
+		}
+		e.refreshing = true
+		out = append(out, k)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+// RequestAsyncRefresh — dipicu stale hit. Spawn goroutine sekali;
+// kalau entry sudah refreshing, no-op.
+func (c *dnsForwardCache) RequestAsyncRefresh(key string, fn func(string)) {
+	c.mu.Lock()
+	e, ok := c.data[key]
+	if !ok || e.refreshing {
+		c.mu.Unlock()
+		return
+	}
+	e.refreshing = true
+	c.mu.Unlock()
+	go fn(key)
+}
+
+// ClearRefreshing — dipanggil saat refresh selesai / gagal.
+func (c *dnsForwardCache) ClearRefreshing(key string) {
+	c.mu.Lock()
+	if e, ok := c.data[key]; ok {
+		e.refreshing = false
+	}
+	c.mu.Unlock()
 }
 
 func (c *dnsForwardCache) Stats() map[string]int64 {
@@ -210,7 +359,7 @@ func (c *dnsForwardCache) Stats() map[string]int64 {
 }
 
 // ============================================================
-// DNSServer — forward-only
+// DNSServer — forward-only + stale-while-revalidate
 // ============================================================
 type DNSServer struct {
 	cfg       *Config
@@ -225,9 +374,12 @@ type DNSServer struct {
 	queries   atomic.Int64
 	errors    atomic.Int64
 	fwdCache  *dnsForwardCache
+	ctx       context.Context
+	cancel    context.CancelFunc
 }
 
 func NewDNSServer(cfg *Config, logger *Logger, realCache *RealIPCache, tunnel *SSHTunnel, ab *Adblocker) *DNSServer {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &DNSServer{
 		cfg:       cfg,
 		logger:    logger,
@@ -235,6 +387,8 @@ func NewDNSServer(cfg *Config, logger *Logger, realCache *RealIPCache, tunnel *S
 		tunnel:    tunnel,
 		adblocker: ab,
 		fwdCache:  newDNSForwardCache(),
+		ctx:       ctx,
+		cancel:    cancel,
 	}
 }
 
@@ -252,9 +406,10 @@ func (d *DNSServer) Start() error {
 	d.udpConn = udp
 	d.tcpLn = tcp
 	d.logger.Info("DNS listen di %s (forward via tunnel, upstream %s)", d.cfg.DNS.Bind, d.cfg.DNS.Upstream)
-	d.wg.Add(2)
+	d.wg.Add(3)
 	go d.serveUDP()
 	go d.serveTCP()
+	go d.refreshLoop(d.ctx)
 	return nil
 }
 
@@ -363,8 +518,8 @@ func (d *DNSServer) handleQuery(q []byte) []byte {
 func (d *DNSServer) forwardQuery(q []byte, questionEnd int, domain string, qtype, qclass uint16) []byte {
 	cacheKey := fmt.Sprintf("%s|%d|%d", strings.ToLower(domain), qtype, qclass)
 
-	// --- Cache hit: repopulate RealIPCache ---
-	if cached, ok := d.fwdCache.Get(cacheKey); ok {
+	// --- Cache hit (fresh atau stale) ---
+	if cached, fresh, ok := d.fwdCache.Get(cacheKey); ok {
 		if len(cached) >= 2 {
 			cached[0] = q[0]
 			cached[1] = q[1]
@@ -372,44 +527,25 @@ func (d *DNSServer) forwardQuery(q []byte, questionEnd int, domain string, qtype
 		// Repopulate RealIPCache dari response cached (agar tidak expired
 		// lebih cepat dari fwdCache saat client pakai DNS cache sendiri)
 		d.processResponse(cached, domain)
+
+		if !fresh {
+			// Stale hit — serve sekarang, refresh di background.
+			d.logger.Debug("DNS: stale hit %s → serve + async refresh", domain)
+			d.fwdCache.RequestAsyncRefresh(cacheKey, func(k string) {
+				d.refreshEntry(d.ctx, k)
+			})
+		}
 		return cached
 	}
 
-	if d.tunnel == nil || d.tunnel.State() != "connected" {
-		d.logger.Debug("DNS forward: tunnel belum siap, skip %s", domain)
-		d.errors.Add(1)
-		return d.buildErrorResponse(q, questionEnd, 2) // SERVFAIL
-	}
-
-	conn, err := d.tunnel.Dial("tcp", d.cfg.DNS.Upstream)
+	// --- Cache miss: forward blocking ---
+	resp, err := d.forwardRaw(q)
 	if err != nil {
-		d.logger.Warn("DNS forward dial ke %s gagal: %v", d.cfg.DNS.Upstream, err)
-		d.errors.Add(1)
-		return d.buildErrorResponse(q, questionEnd, 2)
-	}
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
-
-	msg := make([]byte, 2+len(q))
-	msg[0] = byte(len(q) >> 8)
-	msg[1] = byte(len(q))
-	copy(msg[2:], q)
-	if _, err := conn.Write(msg); err != nil {
-		d.errors.Add(1)
-		return d.buildErrorResponse(q, questionEnd, 2)
-	}
-	lenBuf := make([]byte, 2)
-	if _, err := io.ReadFull(conn, lenBuf); err != nil {
-		d.errors.Add(1)
-		return d.buildErrorResponse(q, questionEnd, 2)
-	}
-	respLen := int(lenBuf[0])<<8 | int(lenBuf[1])
-	if respLen == 0 || respLen > 8192 {
-		d.errors.Add(1)
-		return d.buildErrorResponse(q, questionEnd, 2)
-	}
-	resp := make([]byte, respLen)
-	if _, err := io.ReadFull(conn, resp); err != nil {
+		if err.Error() == "tunnel not ready" {
+			d.logger.Debug("DNS forward: tunnel belum siap, skip %s", domain)
+		} else {
+			d.logger.Warn("DNS forward dial ke %s gagal: %v", d.cfg.DNS.Upstream, err)
+		}
 		d.errors.Add(1)
 		return d.buildErrorResponse(q, questionEnd, 2)
 	}
@@ -453,8 +589,42 @@ func (d *DNSServer) forwardQuery(q []byte, questionEnd int, domain string, qtype
 	}
 
 	d.logger.Debug("DNS forward: %s (type %d) → %d bytes, rcode=%d, ttl=%v",
-		domain, qtype, respLen, rcode, cacheTTL)
+		domain, qtype, len(resp), rcode, cacheTTL)
 	return resp
+}
+
+// forwardRaw — forward mentah via tunnel, tanpa cache.
+func (d *DNSServer) forwardRaw(q []byte) ([]byte, error) {
+	if d.tunnel == nil || d.tunnel.State() != "connected" {
+		return nil, fmt.Errorf("tunnel not ready")
+	}
+	conn, err := d.tunnel.Dial("tcp", d.cfg.DNS.Upstream)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	msg := make([]byte, 2+len(q))
+	msg[0] = byte(len(q) >> 8)
+	msg[1] = byte(len(q))
+	copy(msg[2:], q)
+	if _, err := conn.Write(msg); err != nil {
+		return nil, err
+	}
+	lenBuf := make([]byte, 2)
+	if _, err := io.ReadFull(conn, lenBuf); err != nil {
+		return nil, err
+	}
+	respLen := int(lenBuf[0])<<8 | int(lenBuf[1])
+	if respLen == 0 || respLen > 8192 {
+		return nil, fmt.Errorf("bad resp len %d", respLen)
+	}
+	resp := make([]byte, respLen)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 // processResponse parse answer section: isi RealIPCache untuk A record,
@@ -545,6 +715,139 @@ func (d *DNSServer) processResponse(resp []byte, domain string) (uint32, bool) {
 	return minTTL, hasAnswer
 }
 
+// ============================================================
+// Background refresh — stale-while-revalidate
+// ============================================================
+
+// refreshLoop — scan periodik, refresh entry yang sudah masuk window
+// 90% TTL dan masih "hangat" (baru dipakai user).
+func (d *DNSServer) refreshLoop(ctx context.Context) {
+	defer d.wg.Done()
+	tk := time.NewTicker(refreshScanInterval)
+	defer tk.Stop()
+
+	sem := make(chan struct{}, refreshConcurrency)
+	var batchWG sync.WaitGroup
+
+	for {
+		select {
+		case <-ctx.Done():
+			batchWG.Wait()
+			return
+		case <-tk.C:
+			keys := d.fwdCache.GetRefreshable(time.Now(), dnsRefreshIdleMax, refreshBatchLimit)
+			for _, k := range keys {
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					batchWG.Wait()
+					return
+				}
+				batchWG.Add(1)
+				go func(key string) {
+					defer batchWG.Done()
+					defer func() { <-sem }()
+					d.refreshEntry(ctx, key)
+				}(k)
+			}
+			batchWG.Wait()
+		}
+	}
+}
+
+// refreshEntry — re-resolve satu entry. Di-share oleh refreshLoop dan
+// stale-hit trigger. Selalu ClearRefreshing saat selesai.
+func (d *DNSServer) refreshEntry(ctx context.Context, key string) {
+	defer d.fwdCache.ClearRefreshing(key)
+
+	if ctx.Err() != nil {
+		return
+	}
+	parts := strings.SplitN(key, "|", 3)
+	if len(parts) != 3 {
+		return
+	}
+	domain := parts[0]
+	qtype64, err := strconv.ParseUint(parts[1], 10, 16)
+	if err != nil {
+		return
+	}
+	qclass64, err := strconv.ParseUint(parts[2], 10, 16)
+	if err != nil {
+		return
+	}
+
+	q := buildDNSQuery(domain, uint16(qtype64), uint16(qclass64))
+	if q == nil {
+		return
+	}
+
+	resp, err := d.forwardRaw(q)
+	if err != nil {
+		d.logger.Debug("DNS refresh: %s gagal: %v", domain, err)
+		return // biarkan entry lama sampai staleUntil
+	}
+	if ctx.Err() != nil {
+		return
+	}
+
+	minTTL, hasAnswer := d.processResponse(resp, domain)
+	rcode := uint8(0)
+	if len(resp) >= 4 {
+		rcode = resp[3] & 0x0F
+	}
+
+	var cacheTTL time.Duration
+	switch {
+	case rcode == 0 && hasAnswer:
+		if minTTL < 60 {
+			minTTL = 60
+		}
+		if minTTL > 3600 {
+			minTTL = 3600
+		}
+		cacheTTL = time.Duration(minTTL) * time.Second
+	case rcode == 3, rcode == 5:
+		cacheTTL = 30 * time.Second
+	case rcode == 0 && !hasAnswer:
+		cacheTTL = 60 * time.Second
+	}
+
+	if cacheTTL > 0 {
+		d.fwdCache.Refresh(key, resp, cacheTTL)
+		d.logger.Debug("DNS refresh OK: %s (type %d) → ttl=%v", domain, qtype64, cacheTTL)
+	}
+}
+
+// buildDNSQuery — query minimal (RD=1) untuk keperluan refresh.
+func buildDNSQuery(domain string, qtype, qclass uint16) []byte {
+	if len(domain) == 0 || len(domain) > 253 {
+		return nil
+	}
+	q := make([]byte, 12)
+	q[0], q[1] = 0x00, 0x01 // ID
+	q[2] = 0x01             // RD
+	q[5] = 0x01             // QDCOUNT=1
+
+	for _, label := range strings.Split(domain, ".") {
+		if label == "" {
+			continue
+		}
+		if len(label) > 63 {
+			return nil
+		}
+		q = append(q, byte(len(label)))
+		q = append(q, label...)
+	}
+	q = append(q, 0x00)
+	q = append(q, byte(qtype>>8), byte(qtype))
+	q = append(q, byte(qclass>>8), byte(qclass))
+	return q
+}
+
+// ============================================================
+// Response builder
+// ============================================================
 func (d *DNSServer) buildEmptyResponse(q []byte, questionEnd int) []byte {
 	resp := make([]byte, questionEnd)
 	copy(resp, q[:questionEnd])
@@ -599,6 +902,9 @@ func (d *DNSServer) buildBlockedResponse(q []byte, questionEnd int, qtype uint16
 func (d *DNSServer) Close() {
 	if d.closed.Swap(true) {
 		return
+	}
+	if d.cancel != nil {
+		d.cancel()
 	}
 	if d.udpConn != nil {
 		d.udpConn.Close()
