@@ -196,7 +196,7 @@ func DefaultConfig() *Config {
 		TunnelType:         "direct",
 		Pinger:             30,
 		PingerMax:          45,
-  Pinger timeout:     Duration(15 * time.Second),
+  PingerTimeout:     Duration(15 * time.Second),
 		NoDelay:            true,
 		StartupTimeout:     Duration(60 * time.Second),
 		ConnRetention:      Duration(60 * time.Second),
