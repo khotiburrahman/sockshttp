@@ -20,14 +20,21 @@
 max_retry_per_account: 3    # rotate setelah 3x gagal per akun (auth fail = rotate langsung)
 
 ssh_accounts:
-  - server: server1.example.com
+  - name: "Utama"
+    server: server1.example.com
     server_port: 443
     username: user1
     password: pass1
-  - server: server2.example.com
+  - name: "Backup"
+    server: server2.example.com
     server_port: 443
     username: user2
     password: pass2
+  - name: "Cadangan"
+    server: server3.example.com
+    server_port: 22
+    username: user3
+    key_path: /root/.ssh/id_ed25519
   # - server: server3.example.com
   #   server_port: 22
   #   username: user3
