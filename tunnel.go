@@ -694,25 +694,24 @@ func (t *SSHTunnel) pinger(client *ssh.Client) {
 			done <- err
 		}()
 
+				timeout := t.cfg.PingerTimeout.D()
+		if timeout <= 0 {
+			timeout = 15 * time.Second // Fallback jika di YAML kosong
+		}
+
 		select {
 		case err := <-done:
 			if err != nil {
 				t.logger.Warn("Ping gagal → paksa reconnect: %v", err)
 				client.Close()
-				select {
-				case t.disconCh <- err:
-				default:
-				}
+				select { case t.disconCh <- err: default: }
 				return
 			}
-		case <-time.After(5 * time.Second):
-			err := fmt.Errorf("ping timeout 5s (koneksi mati diam-diam)")
+		case <-time.After(timeout):
+			err := fmt.Errorf("ping timeout %s (koneksi mati diam-diam)", timeout)
 			t.logger.Warn("%v → paksa reconnect", err)
 			client.Close()
-			select {
-			case t.disconCh <- err:
-			default:
-			}
+			select { case t.disconCh <- err: default: }
 			return
 		}
 	}
