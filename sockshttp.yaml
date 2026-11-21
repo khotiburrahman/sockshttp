@@ -52,6 +52,7 @@ dynamic_rules_file: "/root/sockshttp-linux-arm64/dynamic_rules.yaml"
 
 pinger: 30
 pinger_max: 45
+pinger_timeout: 20s
 no_delay: true
 
 startup_timeout: 60s
