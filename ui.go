@@ -14,6 +14,84 @@ const uiHTML = `<!DOCTYPE html>
     var t = localStorage.getItem('sockshttp_theme') || 'dark';
     document.documentElement.setAttribute('data-theme', t);
   })();
+
+// ============ SSH accounts ============
+async function loadSSHAccounts(){
+  if (SOCKSHTTP_LOCKED) return;
+  try{
+    const r = await fetch('/api/ssh/accounts');
+    if (r.status === 401) { SOCKSHTTP_LOCKED = true; showLoginModal(); return; }
+    const d = await r.json();
+    renderSSHAccounts(d);
+  }catch(e){}
+}
+
+function renderSSHAccounts(d){
+  const c = document.getElementById('sshAccountsContainer');
+  const badge = document.getElementById('sshStateBadge');
+  if (badge) {
+    badge.textContent = (d.state || '?').toUpperCase();
+    badge.className = d.state === 'connected'
+      ? 'badge-on' : (d.state === 'connecting' ? 'badge-off' : 'badge-off');
+    if (d.state === 'connected') badge.className = 'badge-on';
+  }
+
+  const accs = d.accounts || [];
+  if (accs.length === 0) {
+    c.innerHTML = '<div class="empty">Tidak ada akun SSH terdaftar</div>';
+    return;
+  }
+
+  c.innerHTML = accs.map(a => {
+    const isCur = a.current;
+    const btn = isCur
+      ? '<button class="ssh-acc-btn active" disabled>● ACTIVE</button>'
+      : '<button class="ssh-acc-btn" onclick="switchSSHAccount(' + a.index + ')">Switch →</button>';
+    return '<div class="ssh-acc-card ' + (isCur ? 'current' : '') + '">' +
+      '<div class="ssh-acc-name">' +
+        '<span>' + esc(a.name) + '</span>' +
+        '<span class="idx">' + (a.index + 1) + '/' + accs.length + '</span>' +
+      '</div>' +
+      '<div class="ssh-acc-meta">' +
+        esc(a.username) + '@' + esc(a.server) + ':' + a.port +
+      '</div>' +
+      btn +
+    '</div>';
+  }).join('');
+}
+
+async function switchSSHAccount(idx){
+  if (!confirm('Switch ke akun ini?\nSemua koneksi aktif akan diputus sebentar.')) return;
+  try{
+    const r = await fetch('/api/ssh/switch', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({index: idx})
+    });
+    if (r.status === 401) { SOCKSHTTP_LOCKED = true; showLoginModal(); return; }
+    if (!r.ok) throw new Error(await r.text());
+    toast('Switching SSH account...', 'success');
+    setTimeout(() => { loadSSHAccounts(); loadStatus(); }, 500);
+  }catch(e){
+    toast('Err: ' + e.message, 'error');
+  }
+}
+
+async function rejectAllConns(){
+  if (!confirm('Putus SEMUA koneksi aktif sekarang?')) return;
+  try{
+    const r = await fetch('/api/connections/reject-all', {method: 'POST'});
+    if (r.status === 401) { SOCKSHTTP_LOCKED = true; showLoginModal(); return; }
+    if (!r.ok) throw new Error(await r.text());
+    const d = await r.json();
+    toast('Koneksi diputus: ' + (d.closed || 0), 'success');
+    if (document.getElementById('tab-connections').classList.contains('active')) {
+      loadConnections();
+    }
+  }catch(e){
+    toast('Err: ' + e.message, 'error');
+  }
+}
 </script>
 <style>
 :root{
@@ -404,6 +482,43 @@ input[type=checkbox]:checked::after{
   main{padding:20px}
   .group-card{min-width:160px}
 }
+
+.ssh-acc-card{
+  background:var(--bg-elev);border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:8px;min-width:180px;flex-shrink:0;
+  display:flex;flex-direction:column;gap:4px;transition:var(--t);
+}
+.ssh-acc-card.current{
+  border-color:var(--green);
+  box-shadow:0 0 0 1px var(--green-bg);
+  background:linear-gradient(145deg,var(--green-bg),var(--bg-elev));
+}
+.ssh-acc-name{
+  font-weight:600;color:var(--text);font-size:11px;
+  display:flex;justify-content:space-between;align-items:center;gap:6px;
+}
+.ssh-acc-name .idx{
+  color:var(--text-subtle);font-family:'JetBrains Mono',monospace;
+  font-size:9px;font-weight:500;
+}
+.ssh-acc-meta{
+  color:var(--text-muted);font-family:'JetBrains Mono',monospace;
+  font-size:9.5px;word-break:break-all;line-height:1.3;
+}
+.ssh-acc-btn{
+  width:100%;padding:4px 6px;font-size:10px;font-weight:600;
+  border-radius:4px;cursor:pointer;border:1px solid var(--border-hover);
+  background:var(--surface);color:var(--text);font-family:inherit;
+  transition:var(--t);
+}
+.ssh-acc-btn:hover:not(:disabled){
+  background:var(--blue);border-color:var(--blue);color:#fff;
+}
+.ssh-acc-btn:disabled{opacity:0.6;cursor:not-allowed;}
+.ssh-acc-btn.active{
+  background:var(--green-bg);color:var(--green);
+  border-color:var(--green);cursor:default;
+}
 </style>
 </head>
 <body>
@@ -436,6 +551,21 @@ input[type=checkbox]:checked::after{
 
 <!-- DASHBOARD -->
 <div id="tab-dashboard" class="tab active">
+<div class="groups-section">
+  <div class="groups-title" style="display:flex;justify-content:space-between;align-items:center;">
+    <span>
+      SSH Accounts
+      <span id="sshStateBadge" class="badge-off" style="margin-left:6px;font-size:9px;">—</span>
+    </span>
+    <button class="btn btn-danger" onclick="rejectAllConns()"
+            style="padding:3px 10px;font-size:10px;letter-spacing:0.3px;">
+      ✕ Reject All Connections
+    </button>
+  </div>
+  <div class="groups-container" id="sshAccountsContainer">
+    <div class="empty">Loading...</div>
+  </div>
+</div>
   <div class="stat" id="statsRow"></div>
 
   <div class="groups-section">
@@ -730,7 +860,15 @@ async function loadStatus(){
     const state=d.state||'disconnected';
     badge.className='state-badge state-'+state;
     document.getElementById('stateText').textContent=state;
-    document.getElementById('serverInfo').innerHTML='<span style="color:var(--text);font-weight:500">'+esc(d.server||'')+'</span>';
+    let headerExtra = '';
+if (d.ssh_account && d.ssh_account.name && d.ssh_account.total > 0) {
+  const sa = d.ssh_account;
+  const pos = sa.position > 0 ? ' (' + sa.position + '/' + sa.total + ')' : '';
+  headerExtra = ' <span style="color:var(--text-muted);font-family:JetBrains Mono,monospace">· <b style="color:var(--purple);font-weight:600">'
+    + esc(sa.name) + '</b>' + pos + '</span>';
+}
+document.getElementById('serverInfo').innerHTML =
+  '<span style="color:var(--text);font-weight:500">' + esc(d.server || '') + '</span>' + headerExtra;
     document.getElementById('versionInfo').textContent='v'+(d.version||'?');
 
     const stateColor=state==='connected'?'var(--green)':(state==='connecting'?'var(--yellow)':'var(--red)');
@@ -1275,7 +1413,7 @@ if (SOCKSHTTP_AUTHED) {
     setInterval(loadDevices,3000);
     setInterval(loadProxies,5000);
     setInterval(()=>{if(connState==='active' || document.getElementById('tab-connections').classList.contains('active'))loadConnections();},1000);
-    loadStatus(); loadTraffic(); loadDevices(); loadProxies(); loadLimiter();
+    loadStatus(); loadTraffic(); loadDevices(); loadProxies(); loadSSHAccounts(); loadLimiter();
 } else {
     showLoginModal();
     if (new URLSearchParams(location.search).has('secret')) {
