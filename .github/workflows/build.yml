@@ -7,6 +7,13 @@ on:
         description: "Git ref (branch/tag/sha), kosong = current"
         required: false
         default: ""
+  push:
+    branches: [main, master]
+    paths:
+      - "*.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/build.yml"
 
 jobs:
   build:
@@ -20,6 +27,14 @@ jobs:
           - goarch: amd64
             name: sockshttp-linux-amd64
 
+    # Pastikan GOPROXY konsisten — jangan pakai `direct` saja.
+    # Kalau runner Anda di region yang memblokir proxy.golang.org,
+    # ganti dengan mirror (lihat catatan di bawah).
+    env:
+      GOPROXY: "https://proxy.golang.org,direct"
+      GOSUMDB: "sum.golang.org"
+      CGO_ENABLED: "0"
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,19 +44,35 @@ jobs:
         with:
           go-version: "1.24"
           cache: true
+          # cache-dependency-path default: go.sum — OK kalau go.sum di-commit
+          cache-dependency-path: go.sum
 
-      - name: go mod tidy
-        run: go mod tidy
+      # Baca-only — TIDAK boleh ubah go.mod/go.sum di CI
+      - name: go mod download
+        run: go mod download
+
+      - name: go mod verify
+        run: go mod verify
+
+      # Deteksi kalau go.mod/go.sum tidak sinkron (dirty) — fail fast,
+      # jangan diam-diam menulis ulang file.
+      - name: cek go.mod/go.sum tidak dirty
+        run: |
+          go mod tidy
+          if ! git diff --exit-code go.mod go.sum; then
+            echo "::error::go.mod / go.sum tidak sinkron. Jalankan 'go mod tidy' di lokal, commit, lalu push."
+            git diff go.mod go.sum
+            exit 1
+          fi
 
       - name: go vet
         run: go vet ./...
 
       - name: go test
-        run: go test ./...
+        run: go test -race -count=1 ./...
 
       - name: build
         env:
-          CGO_ENABLED: "0"
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
         run: |
@@ -60,10 +91,13 @@ jobs:
         run: |
           cd dist
           cp ../sockshttp.yaml .
+          cp ../dynamic_rules.yaml . || true
           tar czf ${{ matrix.name }}.tar.gz \
-            ${{ matrix.name }} sockshttp.yaml
+            ${{ matrix.name }} sockshttp.yaml dynamic_rules.yaml 2>/dev/null || \
+          tar czf ${{ matrix.name }}.tar.gz ${{ matrix.name }} sockshttp.yaml
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
           path: dist/${{ matrix.name }}.tar.gz
+          retention-days: 7
