@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+var ErrTunnelNotReady = errors.New("tunnel not ready")
 
 // ============================================================
 // Konstanta tuning untuk stale-while-revalidate.
@@ -153,13 +156,15 @@ func (c *RealIPCache) PruneLoop(ctx context.Context) {
 // dnsForwardCache — cache response DNS dengan LRU + stale serving.
 //
 // Siklus hidup entry:
-//   Set          → expire = now+ttl, refreshAt = now+0.9*ttl,
-//                  staleUntil = now+ttl+dnsStaleWindow
-//   Get (fresh)  → now < expire, serve
-//   Get (stale)  → expire ≤ now < staleUntil, serve + async refresh
-//   Get (dead)   → now ≥ staleUntil, hapus
-//   Refresh      → reset semua timestamp, TANPA MoveToFront
-//                  (posisi LRU hanya ditentukan query user)
+//
+//	Set          → expire = now+ttl, refreshAt = now+0.9*ttl,
+//	               staleUntil = now+ttl+dnsStaleWindow
+//	Get (fresh)  → now < expire, serve
+//	Get (stale)  → expire ≤ now < staleUntil, serve + async refresh
+//	Get (dead)   → now ≥ staleUntil, hapus
+//	Refresh      → reset semua timestamp, TANPA MoveToFront
+//	               (posisi LRU hanya ditentukan query user)
+//
 // ============================================================
 type cachedDNS struct {
 	resp        []byte
@@ -300,6 +305,7 @@ func (c *dnsForwardCache) Refresh(key string, resp []byte, ttl time.Duration) {
 //   - belum expire (masih fresh)
 //   - baru dipakai user dalam idleMax
 //   - tidak sedang di-refresh goroutine lain
+//
 // Entry yang di-pick ditandai refreshing=true agar tidak dobel.
 func (c *dnsForwardCache) GetRefreshable(now time.Time, idleMax time.Duration, limit int) []string {
 	c.mu.Lock()
@@ -376,11 +382,13 @@ type DNSServer struct {
 	fwdCache  *dnsForwardCache
 	ctx       context.Context
 	cancel    context.CancelFunc
+	resolver  DNSResolver
+	blacklist *Blacklist
 }
 
 func NewDNSServer(cfg *Config, logger *Logger, realCache *RealIPCache, tunnel *SSHTunnel, ab *Adblocker) *DNSServer {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &DNSServer{
+	d := &DNSServer{
 		cfg:       cfg,
 		logger:    logger,
 		realCache: realCache,
@@ -390,6 +398,32 @@ func NewDNSServer(cfg *Config, logger *Logger, realCache *RealIPCache, tunnel *S
 		ctx:       ctx,
 		cancel:    cancel,
 	}
+
+	// Pilih resolver sesuai dns.mode
+	switch strings.ToLower(cfg.DNS.Mode) {
+	case "doh":
+		d.resolver = NewDoHResolver(cfg.DNS.DoH.URL, cfg.DNS.DoH.Method, tunnel, 10*time.Second)
+		logger.Info("[dns] mode=DoH url=%s method=%s (via tunnel)", cfg.DNS.DoH.URL, cfg.DNS.DoH.Method)
+	case "doq":
+		d.resolver = NewDoQResolver(cfg.DNS.DoQ.Server, cfg.DNS.DoQ.TLSInsecure)
+		logger.Info("[dns] mode=DoQ server=%s (LANGSUNG, bukan via tunnel — SSH hanya TCP)",
+			cfg.DNS.DoQ.Server)
+	default:
+		d.resolver = NewTunnelResolver(tunnel, cfg.DNS.Upstream)
+		logger.Info("[dns] mode=forward upstream=%s (via tunnel)", cfg.DNS.Upstream)
+	}
+
+	// Blacklist opsional
+	if cfg.Blacklist.Enabled {
+		bl := NewBlacklist(logger)
+		if err := bl.Load(&cfg.Blacklist); err != nil {
+			logger.Warn("[blacklist] load gagal: %v", err)
+		} else {
+			d.blacklist = bl
+		}
+	}
+
+	return d
 }
 
 func (d *DNSServer) Start() error {
@@ -500,6 +534,15 @@ func (d *DNSServer) handleQuery(q []byte) []byte {
 	questionEnd := pos
 	domain := strings.Join(labels, ".")
 
+	// Blacklist user-defined (prioritas tertinggi, override adblock whitelist)
+	if d.blacklist != nil && d.blacklist.MatchDomain(domain) {
+		d.logger.Debug("DNS: %s diblokir blacklist (mode=%s)", domain, d.cfg.Blacklist.Mode)
+		if d.cfg.Blacklist.Mode == "sinkhole" && qtype == 1 {
+			return d.buildBlockedResponse(q, questionEnd, qtype)
+		}
+		return d.buildErrorResponse(q, questionEnd, 3) // NXDOMAIN
+	}
+
 	// Adblock
 	if d.adblocker != nil && d.adblocker.IsBlocked(domain) {
 		d.logger.Debug("DNS: %s diblokir oleh Adblock", domain)
@@ -541,10 +584,10 @@ func (d *DNSServer) forwardQuery(q []byte, questionEnd int, domain string, qtype
 	// --- Cache miss: forward blocking ---
 	resp, err := d.forwardRaw(q)
 	if err != nil {
-		if err.Error() == "tunnel not ready" {
+		if errors.Is(err, ErrTunnelNotReady) {
 			d.logger.Debug("DNS forward: tunnel belum siap, skip %s", domain)
 		} else {
-			d.logger.Warn("DNS forward dial ke %s gagal: %v", d.cfg.DNS.Upstream, err)
+			d.logger.Warn("DNS forward ke %s gagal: %v", d.cfg.DNS.Upstream, err)
 		}
 		d.errors.Add(1)
 		return d.buildErrorResponse(q, questionEnd, 2)
@@ -593,38 +636,14 @@ func (d *DNSServer) forwardQuery(q []byte, questionEnd int, domain string, qtype
 	return resp
 }
 
-// forwardRaw — forward mentah via tunnel, tanpa cache.
+// forwardRaw — forward mentah via resolver, tanpa cache.
 func (d *DNSServer) forwardRaw(q []byte) ([]byte, error) {
-	if d.tunnel == nil || d.tunnel.State() != "connected" {
-		return nil, fmt.Errorf("tunnel not ready")
+	if d.resolver == nil {
+		return nil, fmt.Errorf("resolver tidak terinisialisasi")
 	}
-	conn, err := d.tunnel.Dial("tcp", d.cfg.DNS.Upstream)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
-
-	msg := make([]byte, 2+len(q))
-	msg[0] = byte(len(q) >> 8)
-	msg[1] = byte(len(q))
-	copy(msg[2:], q)
-	if _, err := conn.Write(msg); err != nil {
-		return nil, err
-	}
-	lenBuf := make([]byte, 2)
-	if _, err := io.ReadFull(conn, lenBuf); err != nil {
-		return nil, err
-	}
-	respLen := int(lenBuf[0])<<8 | int(lenBuf[1])
-	if respLen == 0 || respLen > 8192 {
-		return nil, fmt.Errorf("bad resp len %d", respLen)
-	}
-	resp := make([]byte, respLen)
-	if _, err := io.ReadFull(conn, resp); err != nil {
-		return nil, err
-	}
-	return resp, nil
+	ctx, cancel := context.WithTimeout(d.ctx, 6*time.Second)
+	defer cancel()
+	return d.resolver.Resolve(ctx, q)
 }
 
 // processResponse parse answer section: isi RealIPCache untuk A record,
@@ -911,6 +930,9 @@ func (d *DNSServer) Close() {
 	}
 	if d.tcpLn != nil {
 		d.tcpLn.Close()
+	}
+	if d.resolver != nil {
+		d.resolver.Close()
 	}
 	d.wg.Wait()
 }
