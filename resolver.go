@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,8 +15,6 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-// ErrTunnelNotReady — sentinel error supaya caller bisa deteksi via errors.Is.
-var ErrTunnelNotReady = errors.New("tunnel not ready")
 
 // DNSResolver — abstraksi upstream DNS.
 type DNSResolver interface {
