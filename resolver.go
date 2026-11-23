@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,9 @@ import (
 
 	"github.com/quic-go/quic-go"
 )
+
+// ErrTunnelNotReady — sentinel error supaya caller bisa deteksi via errors.Is.
+var ErrTunnelNotReady = errors.New("tunnel not ready")
 
 // DNSResolver — abstraksi upstream DNS.
 type DNSResolver interface {
@@ -33,7 +37,7 @@ func NewTunnelResolver(t *SSHTunnel, upstream string) *TunnelResolver {
 
 func (r *TunnelResolver) Resolve(ctx context.Context, q []byte) ([]byte, error) {
 	if r.tunnel == nil || r.tunnel.State() != "connected" {
-		return nil, fmt.Errorf("tunnel not ready")
+		return nil, ErrTunnelNotReady
 	}
 	conn, err := r.tunnel.Dial("tcp", r.upstream)
 	if err != nil {
@@ -85,10 +89,8 @@ func NewDoHResolver(url, method string, tunnel *SSHTunnel, timeout time.Duration
 		TLSClientConfig:   &tls.Config{MinVersion: tls.VersionTLS12},
 		ForceAttemptHTTP2: true,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			// TunnelResolver.Resolve & DoHResolver DialContext:
-if r.tunnel == nil || r.tunnel.State() != "connected" {
-    return nil, ErrTunnelNotReady
-}
+			if tunnel == nil || tunnel.State() != "connected" {
+				return nil, ErrTunnelNotReady
 			}
 			return tunnel.Dial(network, addr)
 		},
@@ -182,7 +184,6 @@ func (r *DoQResolver) Resolve(ctx context.Context, q []byte) ([]byte, error) {
 	}
 	defer stream.Close()
 
-	// RFC 9250: 2-byte length prefix
 	msg := make([]byte, 2+len(q))
 	msg[0] = byte(len(q) >> 8)
 	msg[1] = byte(len(q))
@@ -190,7 +191,7 @@ func (r *DoQResolver) Resolve(ctx context.Context, q []byte) ([]byte, error) {
 	if _, err := stream.Write(msg); err != nil {
 		return nil, err
 	}
-	if err := stream.Close(); err != nil { // half-close write
+	if err := stream.Close(); err != nil {
 		return nil, err
 	}
 
