@@ -46,6 +46,8 @@ type DynamicRules struct {
 	// Dest Limit
 	destEnabled bool
 	destRules   []destRuleParsed
+	// Adblock Whitelist (BARU) — root-domain match
+	adblockWhitelist map[string]bool
 }
 
 func NewDynamicRules(file string, logger *Logger) *DynamicRules {
@@ -67,6 +69,10 @@ type dynamicSnapshot struct {
 		Enabled bool       `yaml:"enabled"`
 		Rules   []DestRule `yaml:"rules"`
 	} `yaml:"dest_limiter"`
+
+ 	Adblock struct {
+		Whitelist []string `yaml:"whitelist"`
+	} `yaml:"adblock"`
 }
 
 func (d *DynamicRules) Reload() {
@@ -124,12 +130,25 @@ func (d *DynamicRules) Reload() {
 		d.rotateMaxRetry = 4
 	}
 
+		// Parse whitelist adblock
+	newWhitelist := make(map[string]bool)
+	for _, w := range snap.Adblock.Whitelist {
+		w = strings.ToLower(strings.TrimSpace(w))
+		w = strings.TrimPrefix(w, "*.")
+		w = strings.TrimPrefix(w, ".")
+		if w == "" {
+			continue
+		}
+		newWhitelist[w] = true
+	}
+
 	d.destEnabled = snap.DestLimiter.Enabled
 	d.destRules = newRules
+	d.adblockWhitelist = newWhitelist
 	d.mu.Unlock()
 
-	d.logger.Info("DynamicRules: memuat ulang (rotate: %v, dest: %v, %d rules)",
-		d.rotateEnabled, d.destEnabled, len(newRules))
+	d.logger.Info("DynamicRules: memuat ulang (rotate: %v, dest: %v, %d rules, whitelist: %d domain)",
+		d.rotateEnabled, d.destEnabled, len(newRules), len(newWhitelist))
 }
 
 func (d *DynamicRules) StartWatcher(ctx context.Context) {
@@ -195,6 +214,31 @@ func (d *DynamicRules) GetDestLimits(ip, domain string) (ruleID string, upRate, 
 		}
 	}
 	return "", 0, 0
+}
+
+// IsWhitelisted memeriksa apakah domain (atau parent-nya) ada di whitelist adblock.
+// Semantik sama dengan adblock: entry `example.com` mencakup `example.com` dan `*.example.com`.
+func (d *DynamicRules) IsWhitelisted(domain string) bool {
+	if domain == "" {
+		return false
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if len(d.adblockWhitelist) == 0 {
+		return false
+	}
+	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
+	if d.adblockWhitelist[domain] {
+		return true
+	}
+	parts := strings.Split(domain, ".")
+	for i := 1; i < len(parts)-1; i++ {
+		parent := strings.Join(parts[i:], ".")
+		if d.adblockWhitelist[parent] {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *DynamicRules) GetProxyRotate() (bool, []int, int, time.Duration) {
