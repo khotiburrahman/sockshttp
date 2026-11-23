@@ -12,13 +12,7 @@ import (
 type Adblocker struct {
 	enable   bool
 	domains  map[string]bool
-	dynRules *DynamicRules // BARU: referensi untuk cek whitelist
-}
-
-// SetDynamicRules mengikat DynamicRules agar whitelist bisa dicek saat runtime.
-// Panggil sekali setelah keduanya dibuat di main().
-func (ab *Adblocker) SetDynamicRules(dynRules *DynamicRules) {
-	ab.dynRules = dynRules
+	dynRules *DynamicRules // referensi untuk cek whitelist
 }
 
 func NewAdblocker(cfg *Config) *Adblocker {
@@ -60,6 +54,12 @@ func NewAdblocker(cfg *Config) *Adblocker {
 	return ab
 }
 
+// SetDynamicRules mengikat DynamicRules agar whitelist bisa dicek saat runtime.
+// Panggil sekali setelah keduanya dibuat di main().
+func (ab *Adblocker) SetDynamicRules(dynRules *DynamicRules) {
+	ab.dynRules = dynRules
+}
+
 func (ab *Adblocker) IsBlocked(domain string) bool {
 	if !ab.enable {
 		return false
@@ -67,7 +67,7 @@ func (ab *Adblocker) IsBlocked(domain string) bool {
 
 	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
 
-	// BARU: cek whitelist dulu — kalau di-whitelist, jangan blokir.
+	// Cek whitelist dulu — kalau di-whitelist, jangan blokir.
 	if ab.dynRules != nil && ab.dynRules.IsWhitelisted(domain) {
 		return false
 	}
