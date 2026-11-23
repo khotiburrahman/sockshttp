@@ -1,0 +1,48 @@
+name: fix-modules
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: go mod tidy
+        env:
+          GOPROXY: "https://proxy.golang.org,direct"
+        run: go mod tidy
+
+      - name: Verifikasi build setelah tidy
+        env:
+          CGO_ENABLED: "0"
+          GOPROXY: "https://proxy.golang.org,direct"
+        run: |
+          go build ./... || {
+            echo "::error::Build gagal setelah tidy — kemungkinan resolver.go belum ada atau ada import error"
+            exit 1
+          }
+
+      - name: Commit hasil tidy
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add go.mod go.sum
+          if git diff --cached --quiet; then
+            echo "Tidak ada perubahan — go.mod/go.sum sudah sinkron."
+            exit 0
+          fi
+          git commit -m "chore(deps): go mod tidy [skip ci]"
+          git push
+          echo "::notice::go.mod & go.sum sudah di-commit. Build otomatis berikutnya akan jalan."
