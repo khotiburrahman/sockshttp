@@ -64,9 +64,42 @@ socks5:
 
 dns:
   enabled: true
-  mode: forward
+  mode: forward                 # forward | doh | doq
   bind: 0.0.0.0:1054
-  upstream: 174.138.21.128:53
+  upstream: 174.138.21.128:53   # hanya dipakai kalau mode=forward
+  doh:
+    url: "https://cloudflare-dns.com/dns-query"
+    method: POST                # GET | POST
+  doq:
+    server: "dns.adguard-dns.com:853"
+    tls_insecure: false
+
+blacklist:
+  enabled: true
+  mode: reject                 # reject (NXDOMAIN) | sinkhole (0.0.0.0)
+  files:
+    - "/etc/sockshttp/blacklist.txt"
+    - "/etc/sockshttp/hosts.adblock"
+  inline:
+    - "ads.example.com"
+    - "*.tracker.net"
+    - "10.66.0.0/16"
+
+dial:
+  socket_buffer: 4194304       # 4 MB
+  keepalive: 30s
+  connect_timeout: 10s
+
+prefetch:
+  enabled: true
+  interval: 30m
+  domains_from_dynamic_rules: true
+  extra_domains:
+    - "youtube.com"
+    - "googlevideo.com"
+    - "facebook.com"
+  warm_dial: false             # true = lebih agresif (dial TCP 443)
+  warm_dial_timeout: 5s
 
 adblock:
   enable: true
@@ -142,6 +175,13 @@ failure_hook:
   script_timeout: 120s
   cooldown: 10m
   once_per_outage: true
+
+# ===== Prefetch domain populer (dari dynamic_rules.yaml) =====
+prefetch:
+  enabled: true
+  interval: 30m
+  warm_dial: false              # true = lebih agresif: TCP:443 via tunnel
+  warm_dial_timeout: 5s
 
 log:
   level: debug
