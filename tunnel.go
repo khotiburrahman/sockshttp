@@ -451,9 +451,23 @@ func (t *SSHTunnel) openRawConn(acct SSHAccount) (net.Conn, error) {
 	var conn net.Conn
 	var lastErr error
 
+	keepAlive := t.cfg.Dial.KeepAlive.D()
+	if keepAlive <= 0 {
+		keepAlive = 30 * time.Second
+	}
+	connectTimeout := t.cfg.Dial.ConnectTimeout.D()
+	if connectTimeout <= 0 {
+		connectTimeout = 10 * time.Second
+	}
+	dialer := &net.Dialer{
+		Timeout:   connectTimeout,
+		KeepAlive: keepAlive,
+		Control:   makeDialControl(t.cfg.Dial.SocketBuffer),
+	}
+
 	for _, ip := range ips {
 		dialAddr := net.JoinHostPort(ip, strconv.Itoa(targetPort))
-		conn, lastErr = net.DialTimeout("tcp", dialAddr, 10*time.Second)
+		conn, lastErr = dialer.Dial("tcp", dialAddr)
 		if lastErr == nil {
 			break
 		}
@@ -694,7 +708,7 @@ func (t *SSHTunnel) pinger(client *ssh.Client) {
 			done <- err
 		}()
 
-				timeout := t.cfg.PingerTimeout.D()
+		timeout := t.cfg.PingerTimeout.D()
 		if timeout <= 0 {
 			timeout = 15 * time.Second // Fallback jika di YAML kosong
 		}
@@ -704,14 +718,20 @@ func (t *SSHTunnel) pinger(client *ssh.Client) {
 			if err != nil {
 				t.logger.Warn("Ping gagal → paksa reconnect: %v", err)
 				client.Close()
-				select { case t.disconCh <- err: default: }
+				select {
+				case t.disconCh <- err:
+				default:
+				}
 				return
 			}
 		case <-time.After(timeout):
 			err := fmt.Errorf("ping timeout %s (koneksi mati diam-diam)", timeout)
 			t.logger.Warn("%v → paksa reconnect", err)
 			client.Close()
-			select { case t.disconCh <- err: default: }
+			select {
+			case t.disconCh <- err:
+			default:
+			}
 			return
 		}
 	}
