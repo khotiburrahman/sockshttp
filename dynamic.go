@@ -46,8 +46,13 @@ type DynamicRules struct {
 	// Dest Limit
 	destEnabled bool
 	destRules   []destRuleParsed
+
 	// Adblock Whitelist (BARU) — root-domain match
 	adblockWhitelist map[string]bool
+
+	// Prefetch (BARU)
+	prefetchEnabled bool
+	prefetchDomains []string
 }
 
 func NewDynamicRules(file string, logger *Logger) *DynamicRules {
@@ -70,9 +75,14 @@ type dynamicSnapshot struct {
 		Rules   []DestRule `yaml:"rules"`
 	} `yaml:"dest_limiter"`
 
- 	Adblock struct {
+	Adblock struct {
 		Whitelist []string `yaml:"whitelist"`
 	} `yaml:"adblock"`
+
+	Prefetch struct {
+		Enabled bool     `yaml:"enabled"`
+		Domains []string `yaml:"domains"`
+	} `yaml:"prefetch"`
 }
 
 func (d *DynamicRules) Reload() {
@@ -130,7 +140,7 @@ func (d *DynamicRules) Reload() {
 		d.rotateMaxRetry = 4
 	}
 
-		// Parse whitelist adblock
+	// Parse whitelist adblock
 	newWhitelist := make(map[string]bool)
 	for _, w := range snap.Adblock.Whitelist {
 		w = strings.ToLower(strings.TrimSpace(w))
@@ -142,13 +152,33 @@ func (d *DynamicRules) Reload() {
 		newWhitelist[w] = true
 	}
 
+	// Parse prefetch domains
+	newPrefetch := make([]string, 0, len(snap.Prefetch.Domains))
+	seenPrefetch := map[string]struct{}{}
+	for _, dm := range snap.Prefetch.Domains {
+		dm = strings.ToLower(strings.TrimSpace(dm))
+		dm = strings.TrimPrefix(dm, "*.")
+		dm = strings.TrimPrefix(dm, ".")
+		if dm == "" {
+			continue
+		}
+		if _, ok := seenPrefetch[dm]; ok {
+			continue
+		}
+		seenPrefetch[dm] = struct{}{}
+		newPrefetch = append(newPrefetch, dm)
+	}
+
 	d.destEnabled = snap.DestLimiter.Enabled
 	d.destRules = newRules
 	d.adblockWhitelist = newWhitelist
+	d.prefetchEnabled = snap.Prefetch.Enabled
+	d.prefetchDomains = newPrefetch
 	d.mu.Unlock()
 
-	d.logger.Info("DynamicRules: memuat ulang (rotate: %v, dest: %v, %d rules, whitelist: %d domain)",
-		d.rotateEnabled, d.destEnabled, len(newRules), len(newWhitelist))
+	d.logger.Info("DynamicRules: memuat ulang (rotate: %v, dest: %v, %d rules, whitelist: %d domain, prefetch: %v/%d domain)",
+		d.rotateEnabled, d.destEnabled, len(newRules), len(newWhitelist),
+		d.prefetchEnabled, len(newPrefetch))
 }
 
 func (d *DynamicRules) StartWatcher(ctx context.Context) {
@@ -245,4 +275,16 @@ func (d *DynamicRules) GetProxyRotate() (bool, []int, int, time.Duration) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.rotateEnabled, d.rotatePorts, d.rotateMaxRetry, d.rotateWindow
+}
+
+// GetPrefetch mengembalikan status enabled + snapshot domain prefetch.
+func (d *DynamicRules) GetPrefetch() (enabled bool, domains []string) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if !d.prefetchEnabled || len(d.prefetchDomains) == 0 {
+		return false, nil
+	}
+	out := make([]string, len(d.prefetchDomains))
+	copy(out, d.prefetchDomains)
+	return true, out
 }
