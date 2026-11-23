@@ -14,6 +14,37 @@ adblock:
     - "*.github.com"        # wildcard prefix juga didukung (sama efeknya)
     - "cdn.telegram.org"    # persis + subdomain-nya
 
+# ===== BARU: prefetch domain populer =====
+# Domain di-resolve proaktif + diisi fwdCache. Hot-reload via StartWatcher.
+# Untuk mengaktifkan fitur ini, set juga `prefetch.enabled: true` di sockshttp.yaml.
+prefetch:
+  enabled: true
+  domains:
+    # Social / chat
+    - "facebook.com"
+    - "instagram.com"
+    - "twitter.com"
+    - "x.com"
+    - "tiktok.com"
+    - "whatsapp.com"
+    - "telegram.org"
+    # Video
+    - "youtube.com"
+    - "googlevideo.com"
+    - "ytimg.com"
+    - "netflix.com"
+    - "nflxvideo.net"
+    # Search / productivity
+    - "google.com"
+    - "gmail.com"
+    - "github.com"
+    - "githubusercontent.com"
+    - "cloudflare.com"
+    # CDN umum (mempercepat cold-start halaman apa pun)
+    - "akamaihd.net"
+    - "fastly.net"
+    - "cloudfront.net"
+
 dest_limiter:
   enabled: true
   rules:
