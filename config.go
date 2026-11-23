@@ -96,13 +96,17 @@ type Config struct {
 
 	DynamicRulesFile string `yaml:"dynamic_rules_file"`
 
-	Pinger    int  `yaml:"pinger"`
-	PingerMax int  `yaml:"pinger_max"`
- PingerTimeout Duration `yaml:"pinger_timeout"` 
-	NoDelay   bool `yaml:"no_delay"`
+	Pinger        int      `yaml:"pinger"`
+	PingerMax     int      `yaml:"pinger_max"`
+	PingerTimeout Duration `yaml:"pinger_timeout"`
+	NoDelay       bool     `yaml:"no_delay"`
 
 	StartupTimeout Duration `yaml:"startup_timeout"`
 	ConnRetention  Duration `yaml:"conn_retention"`
+
+	Blacklist BlacklistConfig `yaml:"blacklist"`
+	Dial      DialConfig      `yaml:"dial"`
+	Prefetch  PrefetchConfig  `yaml:"prefetch"`
 
 	SOCKS5 struct {
 		Bind string `yaml:"bind"`
@@ -110,10 +114,12 @@ type Config struct {
 	} `yaml:"socks5"`
 
 	DNS struct {
-		Enabled  bool   `yaml:"enabled"`
-		Mode     string `yaml:"mode"`
-		Bind     string `yaml:"bind"`
-		Upstream string `yaml:"upstream"`
+		Enabled  bool         `yaml:"enabled"`
+		Mode     string       `yaml:"mode"`
+		Bind     string       `yaml:"bind"`
+		Upstream string       `yaml:"upstream"`
+		DoH      DNSDoHConfig `yaml:"doh"`
+		DoQ      DNSDoQConfig `yaml:"doq"`
 	} `yaml:"dns"`
 
 	Adblock struct {
@@ -190,18 +196,61 @@ type FailureHookConfig struct {
 	OncePerOutage bool     `yaml:"once_per_outage"`
 }
 
+// ===== TAMBAHAN: struct baru =====
+
+type BlacklistConfig struct {
+	Enabled bool     `yaml:"enabled"`
+	Mode    string   `yaml:"mode"` // "reject" (NXDOMAIN) | "sinkhole" (0.0.0.0)
+	Files   []string `yaml:"files"`
+	Inline  []string `yaml:"inline"`
+}
+
+type DNSDoHConfig struct {
+	URL    string `yaml:"url"`
+	Method string `yaml:"method"` // GET | POST (default POST)
+}
+
+type DNSDoQConfig struct {
+	Server      string `yaml:"server"` // host:port
+	TLSInsecure bool   `yaml:"tls_insecure"`
+}
+
+type DialConfig struct {
+	SocketBuffer   int      `yaml:"socket_buffer"` // bytes; 0 = disable
+	KeepAlive      Duration `yaml:"keepalive"`
+	ConnectTimeout Duration `yaml:"connect_timeout"`
+}
+
+type PrefetchConfig struct {
+	Enabled                 bool     `yaml:"enabled"`
+	Interval                Duration `yaml:"interval"`
+	DomainsFromDynamicRules bool     `yaml:"domains_from_dynamic_rules"`
+	ExtraDomains            []string `yaml:"extra_domains"`
+	WarmDial                bool     `yaml:"warm_dial"` // TCP 443 warmup
+	WarmDialTimeout         Duration `yaml:"warm_dial_timeout"`
+}
+
 func DefaultConfig() *Config {
 	c := &Config{
 		ServerPort:         22,
 		TunnelType:         "direct",
 		Pinger:             30,
 		PingerMax:          45,
-  PingerTimeout:     Duration(15 * time.Second),
+		PingerTimeout:      Duration(15 * time.Second),
 		NoDelay:            true,
 		StartupTimeout:     Duration(60 * time.Second),
 		ConnRetention:      Duration(60 * time.Second),
 		MaxRetryPerAccount: 3,
 	}
+	c.Blacklist.Mode = "reject"
+	c.Dial.SocketBuffer = 4 * 1024 * 1024 // 4 MB
+	c.Dial.KeepAlive = Duration(30 * time.Second)
+	c.Dial.ConnectTimeout = Duration(10 * time.Second)
+	c.Prefetch.Enabled = false
+	c.Prefetch.Interval = Duration(30 * time.Minute)
+	c.Prefetch.DomainsFromDynamicRules = true
+	c.Prefetch.WarmDial = false
+	c.Prefetch.WarmDialTimeout = Duration(5 * time.Second)
 	c.SOCKS5.Bind = "127.0.0.1"
 	c.SOCKS5.Port = 7777
 	c.DNS.Enabled = true
@@ -267,11 +316,24 @@ func LoadYAMLConfig(path string) (*Config, error) {
 	switch strings.ToLower(cfg.DNS.Mode) {
 	case "", "forward":
 		cfg.DNS.Mode = "forward"
+	case "doh":
+		if cfg.DNS.DoH.URL == "" {
+			fmt.Fprintf(os.Stderr, "WARN: dns.mode=doh tanpa dns.doh.url → fallback forward\n")
+			cfg.DNS.Mode = "forward"
+		}
+		if cfg.DNS.DoH.Method == "" {
+			cfg.DNS.DoH.Method = "POST"
+		}
+	case "doq":
+		if cfg.DNS.DoQ.Server == "" {
+			fmt.Fprintf(os.Stderr, "WARN: dns.mode=doq tanpa dns.doq.server → fallback forward\n")
+			cfg.DNS.Mode = "forward"
+		}
 	case "fakeip":
-		fmt.Fprintf(os.Stderr, "WARN: dns.mode='fakeip' tidak lagi didukung, dipaksa ke 'forward'\n")
+		fmt.Fprintf(os.Stderr, "WARN: dns.mode='fakeip' tidak lagi didukung, dipaksa 'forward'\n")
 		cfg.DNS.Mode = "forward"
 	default:
-		fmt.Fprintf(os.Stderr, "WARN: dns.mode=%q tidak dikenal, dipaksa ke 'forward'\n", cfg.DNS.Mode)
+		fmt.Fprintf(os.Stderr, "WARN: dns.mode=%q tidak dikenal, dipaksa 'forward'\n", cfg.DNS.Mode)
 		cfg.DNS.Mode = "forward"
 	}
 
