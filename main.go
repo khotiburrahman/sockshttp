@@ -143,6 +143,7 @@ func run() int {
 
 	limiter := NewBandwidthLimiter(cfg.Limiter.Enabled, cfg.Limiter.File, logger)
 	adblock := NewAdblocker(cfg)
+ adblock.SetDynamicRules(dynamicRules)
 
 	dns := NewDNSServer(cfg, logger, realCache, tunnel, adblock)
 	socks5 := NewSOCKS5Server(cfg, logger, tunnel, proxyMgr, tracker)
