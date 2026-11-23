@@ -8,6 +8,12 @@ proxy_rotate:
   max_retries: 4
   window: 2m
 
+adblock:
+  whitelist:
+    - "whatsapp.com"        # mem-whitelist whatsapp.com + *.whatsapp.com
+    - "*.github.com"        # wildcard prefix juga didukung (sama efeknya)
+    - "cdn.telegram.org"    # persis + subdomain-nya
+
 dest_limiter:
   enabled: true
   rules:
