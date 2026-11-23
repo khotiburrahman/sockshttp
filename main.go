@@ -143,7 +143,7 @@ func run() int {
 
 	limiter := NewBandwidthLimiter(cfg.Limiter.Enabled, cfg.Limiter.File, logger)
 	adblock := NewAdblocker(cfg)
- adblock.SetDynamicRules(dynamicRules)
+	adblock.SetDynamicRules(dynamicRules)
 
 	dns := NewDNSServer(cfg, logger, realCache, tunnel, adblock)
 	socks5 := NewSOCKS5Server(cfg, logger, tunnel, proxyMgr, tracker)
@@ -207,6 +207,11 @@ func run() int {
 		return 1
 	}
 
+	// Prefetcher — butuh tunnel connected + dns.resolver + dynamic rules
+	if cfg.Prefetch.Enabled {
+		NewPrefetcher(cfg, dns, tunnel, dynamicRules, logger).Start(ctx)
+	}
+
 	logger.Info("=================================================")
 	logger.Info("  SEMUA LAYANAN SIAP")
 	logger.Info("  Web UI   : http://%s/", cfg.API.Bind)
@@ -214,6 +219,28 @@ func run() int {
 
 	sig := make(chan os.Signal, 2)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+
+	// SIGHUP = reload blacklist dari file (tanpa restart)
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+				if dns.blacklist == nil {
+					logger.Debug("[blacklist] reload dilewati (blacklist nonaktif saat startup)")
+					continue
+				}
+				if err := dns.blacklist.Load(&cfg.Blacklist); err != nil {
+					logger.Warn("[blacklist] reload gagal: %v", err)
+				} else {
+					logger.Info("[blacklist] reload OK (SIGHUP)")
+				}
+			}
+		}
+	}()
 
 	select {
 	case <-sig:
